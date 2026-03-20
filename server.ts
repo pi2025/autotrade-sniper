@@ -8,7 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
 import { isHighImpactEventSoon } from "./services/economicCalendarService.ts";
-import { testConnection, placeOrder } from "./services/oandaService.ts";
+import { testConnection, placeOrder, getAccountBalance, closeOrder, getOpenTrades } from "./services/oandaService.ts";
 import { generateSignalExplanation } from "./services/geminiService.ts";
 import { getUpcomingHighImpactEvents } from "./services/economicCalendarService.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
@@ -56,11 +56,20 @@ let agentMode: AgentMode = 'signals'; // défaut : détection uniquement, pas d'
 let activeStrategy = DEFAULT_STRATEGY;
 let lastScanTime = 0;
 let lastBatchTimeMs = 0;
+// Limites de risque global (chargées depuis app_config, valeurs par défaut sécurisées)
+let riskLimits = {
+  maxConcurrentTrades: 3,   // max trades ouverts simultanément
+  maxTotalRiskPercent:  5,  // max % du capital engagé en même temps
+  maxDrawdownPercent:  15,  // suspension si drawdown > X% depuis capital initial
+  initialCapital:       0,  // chargé depuis OANDA au 1er démarrage
+};
 // signalId → oandaTradeId (stockage en mémoire, non persisté)
 const oandaTradeIds = new Map<string, string>();
 const MAX_CURRENCY_EXPOSURE = 2;
 const MAX_LOGS = 50;
 const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+// Seuil de confiance minimum pour l'exécution autonome (configurable via env)
+const AUTONOMOUS_MIN_CONFIDENCE = parseInt(process.env.AUTONOMOUS_MIN_CONFIDENCE || '75', 10);
 
 // Cache pour les données de marché
 const marketCache = new Map<string, { data: any, expiry: number }>();
@@ -183,6 +192,70 @@ async function fetchYahooInternal(symbol: string, interval: string = '15m', rang
   }
 }
 
+// --- CIRCUIT-BREAKER D'URGENCE ---
+async function emergencyStop(triggeredBy: string): Promise<string> {
+  // 1. Basculer en mode signals immédiatement
+  agentMode = 'signals';
+  isEngineRunning = false;
+  if (supabase) supabase.from('app_config').upsert({ key: 'agentMode', value: 'signals' });
+
+  // 2. Fermer tous les trades ouverts sur OANDA
+  const oandaTrades = await getOpenTrades();
+  let closed = 0, failed = 0;
+  for (const trade of oandaTrades) {
+    const result = await closeOrder(trade.tradeId);
+    result.success ? closed++ : failed++;
+  }
+
+  // 3. Vider oandaTradeIds en mémoire
+  oandaTradeIds.clear();
+
+  const summary =
+    `🚨 *EMERGENCY STOP* — Déclenché par: ${triggeredBy}\n` +
+    `Trades fermés: ${closed} ✅ | Échecs: ${failed} ❌\n` +
+    `Moteur arrêté. Mode: SIGNALS uniquement.`;
+
+  await sendTelegramMessage(summary);
+  console.log(`🚨 Emergency Stop: ${closed} trades fermés, ${failed} échecs`);
+  return summary;
+}
+
+// --- GESTIONNAIRE DE RISQUE GLOBAL ---
+async function checkRiskLimits(): Promise<{ allowed: boolean; reason: string }> {
+  // 1. Nombre de trades ouverts (vérification locale, pas de réseau)
+  if (activeSignals.length >= riskLimits.maxConcurrentTrades) {
+    return { allowed: false, reason: `Limite trades simultanés atteinte (${activeSignals.length}/${riskLimits.maxConcurrentTrades})` };
+  }
+
+  // 2. Risque total engagé + 3. Drawdown (un seul appel OANDA)
+  const acc = await getAccountBalance();
+  if (acc) {
+    const riskPerTrade = parseFloat(process.env.OANDA_RISK_PERCENT || '1');
+    const totalRiskPercent = activeSignals.length * riskPerTrade;
+    if (totalRiskPercent >= riskLimits.maxTotalRiskPercent) {
+      return { allowed: false, reason: `Risque total max atteint (${totalRiskPercent}% ≥ ${riskLimits.maxTotalRiskPercent}%)` };
+    }
+
+    if (riskLimits.initialCapital > 0) {
+      const drawdownPct = ((riskLimits.initialCapital - acc.balance) / riskLimits.initialCapital) * 100;
+      if (drawdownPct >= riskLimits.maxDrawdownPercent) {
+        if (agentMode !== 'signals') {
+          agentMode = 'signals';
+          if (supabase) supabase.from('app_config').upsert({ key: 'agentMode', value: 'signals' });
+          await sendTelegramMessage(
+            `🚨 *DRAWDOWN CRITIQUE* — Agent suspendu automatiquement\n` +
+            `Drawdown: ${drawdownPct.toFixed(1)}% ≥ ${riskLimits.maxDrawdownPercent}%\n` +
+            `Mode basculé sur SIGNALS uniquement.`
+          );
+        }
+        return { allowed: false, reason: `Drawdown critique: ${drawdownPct.toFixed(1)}% — Agent suspendu` };
+      }
+    }
+  }
+
+  return { allowed: true, reason: '' };
+}
+
 // --- MOTEUR DE TRADING ---
 async function runBackgroundMonitor() {
   console.log("🚀 Moteur Sniper V15 Unifié Démarré (24/7)");
@@ -206,6 +279,22 @@ async function runBackgroundMonitor() {
       if (modeCfg?.value) {
         agentMode = modeCfg.value as AgentMode;
         console.log(`🤖 agentMode restauré: ${agentMode}`);
+      }
+
+      const { data: riskCfg } = await supabase.from('app_config').select('value').eq('key', 'riskLimits').single();
+      if (riskCfg?.value) {
+        riskLimits = { ...riskLimits, ...riskCfg.value };
+        console.log(`🛡️ riskLimits restaurés:`, riskLimits);
+      }
+
+      // Capital initial : récupéré une fois depuis OANDA, puis persisté
+      if (riskLimits.initialCapital === 0) {
+        const acc = await getAccountBalance();
+        if (acc) {
+          riskLimits.initialCapital = acc.balance;
+          supabase.from('app_config').upsert({ key: 'riskLimits', value: riskLimits });
+          console.log(`💰 Capital initial enregistré: ${acc.balance} ${acc.currency}`);
+        }
       }
     } catch (e) {
       console.error("Erreur chargement initial Supabase:", e);
@@ -337,6 +426,47 @@ async function runBackgroundMonitor() {
                     { text: '❌ Ignorer', callback_data: `ignore:${newSignal.id}` },
                   ]] : undefined
                 );
+
+                // --- MODE AUTONOME ---
+                if (agentMode === 'autonomous') {
+                  if (newSignal.confidence >= AUTONOMOUS_MIN_CONFIDENCE) {
+                    const { allowed: riskOk, reason: riskReason } = await checkRiskLimits();
+                    if (!riskOk) {
+                      scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol,
+                        status: 'RISK_BLOCKED',
+                        reason: `🛡️ Risque bloqué — ${riskReason}`
+                      }, ...scanLogs].slice(0, MAX_LOGS);
+                    } else {
+                    const orderResult = await placeOrder(newSignal);
+                    if (orderResult.success && orderResult.tradeId) {
+                      oandaTradeIds.set(newSignal.id, orderResult.tradeId);
+                      scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol,
+                        status: 'AUTO_EXECUTED',
+                        reason: `🤖 Autonome — Confiance: ${newSignal.confidence}% ≥ ${AUTONOMOUS_MIN_CONFIDENCE}% — OANDA #${orderResult.tradeId} (${orderResult.units} units)`
+                      }, ...scanLogs].slice(0, MAX_LOGS);
+                      await sendTelegramMessage(
+                        `🤖 *EXÉCUTION AUTONOME* 🤖\n` +
+                        `*Actif:* ${asset.name}\n` +
+                        `*Action:* ${signalEmoji} ${newSignal.type === SignalType.BUY ? 'ACHAT' : 'VENTE'}\n` +
+                        `*Entrée:* ${data.price.toFixed(5)}\n` +
+                        `*TP:* ${newSignal.tradeSetup.takeProfit.toFixed(5)} | *SL:* ${newSignal.tradeSetup.stopLoss.toFixed(5)}\n` +
+                        `*Confiance:* ${newSignal.confidence}% | *OANDA:* \`${orderResult.tradeId}\``
+                      );
+                    } else {
+                      scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol,
+                        status: 'AUTO_EXEC_FAILED',
+                        reason: `🤖 Autonome échoué — ${orderResult.error}`
+                      }, ...scanLogs].slice(0, MAX_LOGS);
+                      await sendTelegramMessage(`⚠️ *Exécution autonome échouée* — ${asset.name}\nErreur: ${orderResult.error}`);
+                    }
+                    } // end riskOk
+                  } else {
+                    scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol,
+                      status: 'AUTO_SKIPPED',
+                      reason: `🤖 Seuil non atteint — Confiance ${newSignal.confidence}% < ${AUTONOMOUS_MIN_CONFIDENCE}%`
+                    }, ...scanLogs].slice(0, MAX_LOGS);
+                  }
+                }
               } else {
                 scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'REJECTED', reason: reason }, ...scanLogs].slice(0, MAX_LOGS);
               }
@@ -359,6 +489,46 @@ async function runBackgroundMonitor() {
 }
 
 // --- API SERVER ---
+// --- RAPPORT QUOTIDIEN ---
+async function sendDailyReport() {
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+  // Trades clôturés aujourd'hui
+  const todayTrades = tradeHistory.filter(t => t.closedAt && t.closedAt >= startOfDay);
+  const wins   = todayTrades.filter(t => t.pnl && t.pnl > 0).length;
+  const losses = todayTrades.filter(t => t.pnl && t.pnl <= 0).length;
+  const totalR = todayTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+
+  // Solde actuel vs capital initial
+  const acc = await getAccountBalance();
+  const balanceNow = acc?.balance ?? 0;
+  const currency   = acc?.currency ?? 'USD';
+  const pnlUsd     = riskLimits.initialCapital > 0 ? balanceNow - riskLimits.initialCapital : 0;
+  const drawdownPct = riskLimits.initialCapital > 0
+    ? ((riskLimits.initialCapital - balanceNow) / riskLimits.initialCapital) * 100
+    : 0;
+
+  // Prochain événement économique majeur
+  const upcoming = await getUpcomingHighImpactEvents(24);
+  const nextEvent = upcoming[0];
+  const nextEventStr = nextEvent
+    ? `${nextEvent.currency} — ${nextEvent.title} (dans ${nextEvent.minutesUntil}min)`
+    : 'Aucun événement majeur dans les 24h';
+
+  await sendTelegramMessage(
+    `📊 *RAPPORT QUOTIDIEN — ${now.toLocaleDateString('fr-FR')}*\n\n` +
+    `*Trades du jour:* ${todayTrades.length} (${wins} ✅ / ${losses} ❌)\n` +
+    `*PnL du jour:* ${totalR >= 0 ? '+' : ''}${totalR.toFixed(2)}R\n` +
+    `*PnL USD:* ${pnlUsd >= 0 ? '+' : ''}${pnlUsd.toFixed(2)} ${currency}\n\n` +
+    `*Capital actuel:* ${balanceNow.toFixed(2)} ${currency}\n` +
+    `*Capital initial:* ${riskLimits.initialCapital.toFixed(2)} ${currency}\n` +
+    `*Drawdown:* ${drawdownPct > 0 ? drawdownPct.toFixed(1) + '%' : '0%'}\n\n` +
+    `*Mode agent:* ${agentMode.toUpperCase()}\n` +
+    `*Prochain événement:* ${nextEventStr}`
+  );
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -418,6 +588,14 @@ async function startServer() {
       mutedAssets,
       agentMode,
     });
+  });
+  apiRouter.post("/engine/risk", requireAuth, async (req, res) => {
+    const { maxConcurrentTrades, maxTotalRiskPercent, maxDrawdownPercent } = req.body;
+    if (maxConcurrentTrades !== undefined) riskLimits.maxConcurrentTrades = maxConcurrentTrades;
+    if (maxTotalRiskPercent !== undefined) riskLimits.maxTotalRiskPercent = maxTotalRiskPercent;
+    if (maxDrawdownPercent !== undefined) riskLimits.maxDrawdownPercent = maxDrawdownPercent;
+    if (supabase) await supabase.from('app_config').upsert({ key: 'riskLimits', value: riskLimits });
+    res.json({ success: true, riskLimits });
   });
   apiRouter.post("/engine/mode", requireAuth, async (req, res) => {
     const { mode } = req.body;
@@ -514,6 +692,18 @@ async function startServer() {
 
     const callbackId = query.id;
     const data: string = query.data ?? '';
+
+    // Commande texte /stop via bouton ou message
+    if (data === '/stop') {
+      await fetch(
+        `https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callback_query_id: callbackId }) }
+      ).catch(() => {});
+      await emergencyStop(`Telegram @${query.from?.username ?? 'user'}`);
+      return;
+    }
+
     const [action, signalId] = data.split(':');
 
     // Acquittement immédiat du bouton (efface le spinner côté Telegram)
@@ -559,6 +749,12 @@ async function startServer() {
     }
   });
 
+  // Emergency stop
+  apiRouter.post("/agent/emergency-stop", requireAuth, async (req, res) => {
+    const summary = await emergencyStop('API HTTP');
+    res.json({ success: true, summary });
+  });
+
   // Proxy Yahoo
   apiRouter.get("/market/yahoo", async (req, res) => {
     const { symbol, interval, range } = req.query;
@@ -590,6 +786,18 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     runBackgroundMonitor().catch(console.error);
+
+    // Rapport quotidien à 22h00 heure locale
+    (async function scheduleDailyReport() {
+      while (true) {
+        const now = new Date();
+        const next22h = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 22, 0, 0, 0);
+        if (next22h <= now) next22h.setDate(next22h.getDate() + 1);
+        const msUntil = next22h.getTime() - now.getTime();
+        await new Promise(r => setTimeout(r, msUntil));
+        await sendDailyReport().catch(console.error);
+      }
+    })();
   });
 }
 
