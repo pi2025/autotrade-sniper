@@ -7,6 +7,7 @@ import fetch from "node-fetch";
 import { createClient } from '@supabase/supabase-js';
 import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
+import { isHighImpactEventSoon } from "./services/economicCalendarService.ts";
 import { testConnection, placeOrder } from "./services/oandaService.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
 
@@ -286,7 +287,8 @@ async function runBackgroundMonitor() {
             }
           } else {
             // --- ANALYSE POUR NOUVEAU SIGNAL ---
-            const { signal: result, diagnostic } = analyzeMarket(asset.symbol, data.price, indicators, activeStrategy);
+            const econCtx = await isHighImpactEventSoon(asset.symbol, 60);
+            const { signal: result, diagnostic } = analyzeMarket(asset.symbol, data.price, indicators, activeStrategy, econCtx);
             
             if (result) {
               const newSignal: Signal = {

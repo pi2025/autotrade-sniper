@@ -235,11 +235,32 @@ export const calculateIndicators = (
   } as any;
 };
 
+// Contexte économique pré-calculé par server.ts (évite de rendre analyzeMarket async)
+export interface EconomicContext {
+  isSoon: boolean;
+  events: { title: string; currency: string; minutesUntil: number }[];
+}
+
 export const analyzeMarket = (
-  symbol: string, price: number, ind: TechnicalIndicators | null, strategy: StrategyParams = DEFAULT_STRATEGY
+  symbol: string, price: number, ind: TechnicalIndicators | null,
+  strategy: StrategyParams = DEFAULT_STRATEGY,
+  economicContext?: EconomicContext
 ): { signal: any, diagnostic: string } => {
   if (!ind) return { signal: null, diagnostic: "Indicateurs insuffisants" };
-  
+
+  // Filtre macro — priorité maximale, avant tous les filtres techniques
+  if (economicContext?.isSoon) {
+    const labels = economicContext.events
+      .map(e => {
+        const when = e.minutesUntil < 0
+          ? `il y a ${Math.abs(e.minutesUntil)}min`
+          : `dans ${e.minutesUntil}min`;
+        return `${e.currency} ${e.title} (${when})`;
+      })
+      .join(' | ');
+    return { signal: null, diagnostic: `Rejet: Annonce imminente — ${labels}` };
+  }
+
   const isBullFan = price > ind.ema20 && ind.ema20 > ind.ema50 && ind.ema50 > ind.ema200;
   const isBearFan = price < ind.ema20 && ind.ema20 < ind.ema50 && ind.ema50 < ind.ema200;
 
