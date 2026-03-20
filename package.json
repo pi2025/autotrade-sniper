@@ -1,0 +1,33 @@
+{
+  "name": "autotrade-sniper-v15",
+  "private": true,
+  "version": "15.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/genai": "^1.31.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "@types/express": "^5.0.6",
+    "@types/node-fetch": "^2.6.13",
+    "date-fns": "^4.1.0",
+    "express": "^5.2.1",
+    "lucide-react": "^0.555.0",
+    "node-fetch": "^2.7.0",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "react-router-dom": "^7.10.0",
+    "recharts": "^3.5.1",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}
