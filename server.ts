@@ -7,6 +7,7 @@ import fetch from "node-fetch";
 import { createClient } from '@supabase/supabase-js';
 import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
+import { testConnection } from "./services/oandaService.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -373,6 +374,10 @@ async function startServer() {
       scanLogs,
       marketData
     });
+  });
+  apiRouter.get("/broker/status", async (req, res) => {
+    const status = await testConnection();
+    res.json(status);
   });
   apiRouter.get("/engine/status", (req, res) => {
     console.log("GET /api/engine/status");
