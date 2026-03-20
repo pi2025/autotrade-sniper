@@ -7,7 +7,7 @@ import fetch from "node-fetch";
 import { createClient } from '@supabase/supabase-js';
 import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
-import { testConnection } from "./services/oandaService.ts";
+import { testConnection, placeOrder } from "./services/oandaService.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -48,9 +48,13 @@ let tradeHistory: Signal[] = [];
 let scanLogs: any[] = [];
 let marketData: Record<string, any> = {};
 let mutedAssets: Record<string, number> = {};
+type AgentMode = 'signals' | 'semi-auto' | 'autonomous';
+let agentMode: AgentMode = 'signals'; // défaut : détection uniquement, pas d'exécution
 let activeStrategy = DEFAULT_STRATEGY;
 let lastScanTime = 0;
 let lastBatchTimeMs = 0;
+// signalId → oandaTradeId (stockage en mémoire, non persisté)
+const oandaTradeIds = new Map<string, string>();
 const MAX_CURRENCY_EXPOSURE = 2;
 const MAX_LOGS = 50;
 const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
@@ -60,22 +64,29 @@ const marketCache = new Map<string, { data: any, expiry: number }>();
 const CACHE_DURATION = 60 * 1000;
 
 // --- HELPERS ---
-async function sendTelegramMessage(text: string) {
+interface TelegramButton { text: string; url?: string; callback_data?: string; }
+
+async function sendTelegramMessage(
+  text: string,
+  buttons?: TelegramButton[][]  // tableau de rangées de boutons (optionnel)
+) {
   if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
     console.warn("⚠️ Telegram not configured. Skipping message.");
     return;
   }
-  const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
+  const body: any = {
+    chat_id: TELEGRAM_CHAT_ID,
+    text,
+    parse_mode: 'Markdown',
+  };
+  if (buttons?.length) {
+    body.reply_markup = { inline_keyboard: buttons };
+  }
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text: text,
-        parse_mode: 'Markdown'
-      })
-    });
+    const response = await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    );
     if (!response.ok) console.error("Telegram Error:", await response.text());
   } catch (error) {
     console.error("Failed to send Telegram message:", error);
@@ -186,6 +197,12 @@ async function runBackgroundMonitor() {
       if (cfg?.value) {
         mutedAssets = cfg.value;
         console.log(`🔇 mutedAssets restaurés: ${Object.keys(mutedAssets).length} actif(s)`);
+      }
+
+      const { data: modeCfg } = await supabase.from('app_config').select('value').eq('key', 'agentMode').single();
+      if (modeCfg?.value) {
+        agentMode = modeCfg.value as AgentMode;
+        console.log(`🤖 agentMode restauré: ${agentMode}`);
       }
     } catch (e) {
       console.error("Erreur chargement initial Supabase:", e);
@@ -302,13 +319,20 @@ async function runBackgroundMonitor() {
                   await supabase.from('signals').insert({ id: newSignal.id, asset: newSignal.asset, timeframe: '15m', content: newSignal });
                 }
                 
-                await sendTelegramMessage(`
-🚀 *NOUVEAU SIGNAL SNIPER V15* 🚀
-*Actif:* ${asset.name}
-*Action:* ${newSignal.type === SignalType.BUY ? '🟢 ACHAT' : '🔴 VENTE'}
-*Entrée:* ${data.price.toFixed(5)}
-*TP:* ${newSignal.tradeSetup.takeProfit.toFixed(5)} | *SL:* ${newSignal.tradeSetup.stopLoss.toFixed(5)}
-                `);
+                const signalEmoji = newSignal.type === SignalType.BUY ? '🟢' : '🔴';
+                const semiAuto = agentMode === 'semi-auto';
+                await sendTelegramMessage(
+                  `🚀 *NOUVEAU SIGNAL SNIPER V15* 🚀\n` +
+                  `*Actif:* ${asset.name}\n` +
+                  `*Action:* ${signalEmoji} ${newSignal.type === SignalType.BUY ? 'ACHAT' : 'VENTE'}\n` +
+                  `*Entrée:* ${data.price.toFixed(5)}\n` +
+                  `*TP:* ${newSignal.tradeSetup.takeProfit.toFixed(5)} | *SL:* ${newSignal.tradeSetup.stopLoss.toFixed(5)}\n` +
+                  `*Confiance:* ${newSignal.confidence}%`,
+                  semiAuto ? [[
+                    { text: '✅ Valider', callback_data: `execute:${newSignal.id}` },
+                    { text: '❌ Ignorer', callback_data: `ignore:${newSignal.id}` },
+                  ]] : undefined
+                );
               } else {
                 scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'REJECTED', reason: reason }, ...scanLogs].slice(0, MAX_LOGS);
               }
@@ -387,8 +411,22 @@ async function startServer() {
       lastBatchTimeMs,
       activeCount: activeSignals.length,
       activeStrategyId: activeStrategy.id,
-      mutedAssets
+      mutedAssets,
+      agentMode,
     });
+  });
+  apiRouter.post("/engine/mode", requireAuth, async (req, res) => {
+    const { mode } = req.body;
+    const valid: AgentMode[] = ['signals', 'semi-auto', 'autonomous'];
+    if (!valid.includes(mode)) {
+      return res.status(400).json({ error: `Mode invalide. Valeurs: ${valid.join(', ')}` });
+    }
+    agentMode = mode;
+    if (supabase) {
+      await supabase.from('app_config').upsert({ key: 'agentMode', value: mode });
+    }
+    console.log(`🤖 agentMode changé: ${agentMode}`);
+    res.json({ success: true, agentMode });
   });
   apiRouter.post("/engine/toggle", requireAuth, (req, res) => {
     isEngineRunning = !isEngineRunning;
@@ -436,6 +474,76 @@ async function startServer() {
       res.json({ success: true });
     } else {
       res.status(404).json({ error: "Signal non trouvé" });
+    }
+  });
+
+  apiRouter.post("/signals/:id/execute", requireAuth, async (req, res) => {
+    const { id } = req.params;
+    const signal = activeSignals.find(s => s.id === id);
+    if (!signal) return res.status(404).json({ error: "Signal non trouvé" });
+    if (oandaTradeIds.has(id)) return res.status(409).json({ error: "Signal déjà exécuté sur OANDA" });
+
+    const result = await placeOrder(signal);
+    if (result.success && result.tradeId) {
+      oandaTradeIds.set(id, result.tradeId);
+      console.log(`✅ Signal ${id} exécuté sur OANDA — tradeId: ${result.tradeId}`);
+      return res.json({ success: true, tradeId: result.tradeId, units: result.units });
+    }
+    return res.status(500).json({ success: false, error: result.error });
+  });
+
+  apiRouter.post("/telegram/webhook", async (req, res) => {
+    // Telegram attend toujours un 200 rapide, même en cas d'erreur interne
+    res.sendStatus(200);
+
+    const update = req.body;
+    const query = update?.callback_query;
+    if (!query) return; // message ordinaire, on ignore
+
+    const callbackId = query.id;
+    const data: string = query.data ?? '';
+    const [action, signalId] = data.split(':');
+
+    // Acquittement immédiat du bouton (efface le spinner côté Telegram)
+    await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: callbackId }) }
+    ).catch(() => {});
+
+    if (action === 'execute') {
+      const signal = activeSignals.find(s => s.id === signalId);
+      if (!signal) {
+        await sendTelegramMessage(`⚠️ Signal \`${signalId.slice(0, 8)}\` introuvable ou déjà clôturé.`);
+        return;
+      }
+      if (oandaTradeIds.has(signalId)) {
+        await sendTelegramMessage(`⚠️ Signal \`${signal.asset}\` déjà exécuté sur OANDA.`);
+        return;
+      }
+      const result = await placeOrder(signal);
+      if (result.success && result.tradeId) {
+        oandaTradeIds.set(signalId, result.tradeId);
+        await sendTelegramMessage(
+          `✅ *ORDRE EXÉCUTÉ*\n` +
+          `*Actif:* ${signal.asset}\n` +
+          `*OANDA Trade ID:* \`${result.tradeId}\`\n` +
+          `*Taille:* ${result.units} units`
+        );
+      } else {
+        await sendTelegramMessage(`❌ *Échec exécution* ${signal.asset}\nErreur: ${result.error}`);
+      }
+    } else if (action === 'ignore') {
+      const signal = activeSignals.find(s => s.id === signalId);
+      if (signal) {
+        activeSignals = activeSignals.filter(s => s.id !== signalId);
+        mutedAssets[signal.asset] = Date.now() + COOLDOWN_MS;
+        if (supabase) {
+          await supabase.from('signals').delete().eq('id', signalId);
+          supabase.from('app_config').upsert({ key: 'mutedAssets', value: mutedAssets });
+        }
+        await sendTelegramMessage(`🔇 Signal *${signal.asset}* ignoré — cooldown 30 min activé.`);
+      }
     }
   });
 
