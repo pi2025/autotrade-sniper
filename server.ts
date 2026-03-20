@@ -180,6 +180,12 @@ async function runBackgroundMonitor() {
       const { data: hist } = await supabase.from('history').select('*').order('closed_at', { ascending: false }).limit(100);
       if (hist) tradeHistory = hist.map(h => h.content);
       console.log(`📦 Chargement: ${activeSignals.length} actifs, ${tradeHistory.length} historiques`);
+
+      const { data: cfg } = await supabase.from('app_config').select('value').eq('key', 'mutedAssets').single();
+      if (cfg?.value) {
+        mutedAssets = cfg.value;
+        console.log(`🔇 mutedAssets restaurés: ${Object.keys(mutedAssets).length} actif(s)`);
+      }
     } catch (e) {
       console.error("Erreur chargement initial Supabase:", e);
     }
@@ -291,7 +297,9 @@ async function runBackgroundMonitor() {
               if (isAllowed) {
                 activeSignals.push(newSignal);
                 scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'SUCCESS', reason: diagnostic }, ...scanLogs].slice(0, MAX_LOGS);
-                await supabase.from('signals').insert({ id: newSignal.id, asset: newSignal.asset, timeframe: '15m', content: newSignal });
+                if (supabase) {
+                  await supabase.from('signals').insert({ id: newSignal.id, asset: newSignal.asset, timeframe: '15m', content: newSignal });
+                }
                 
                 await sendTelegramMessage(`
 🚀 *NOUVEAU SIGNAL SNIPER V15* 🚀
@@ -335,6 +343,17 @@ async function startServer() {
 
   const apiRouter = express.Router();
 
+  // --- MIDDLEWARE AUTH ---
+  const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const secret = process.env.API_SECRET_TOKEN;
+    if (!secret) return next(); // Pas de token configuré = pas de protection (dev)
+    const auth = req.headers.authorization;
+    if (!auth || auth !== `Bearer ${secret}`) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    next();
+  };
+
   // Endpoints API
   apiRouter.get("/health", (req, res) => {
     console.log("GET /api/health");
@@ -366,11 +385,11 @@ async function startServer() {
       mutedAssets
     });
   });
-  apiRouter.post("/engine/toggle", (req, res) => {
+  apiRouter.post("/engine/toggle", requireAuth, (req, res) => {
     isEngineRunning = !isEngineRunning;
     res.json({ isRunning: isEngineRunning });
   });
-  apiRouter.post("/engine/strategy", (req, res) => {
+  apiRouter.post("/engine/strategy", requireAuth, (req, res) => {
     const { strategyId } = req.body;
     const strategy = STRATEGIES.find(s => s.id === strategyId);
     if (strategy) {
@@ -380,21 +399,27 @@ async function startServer() {
       res.status(400).json({ error: "Stratégie invalide" });
     }
   });
-  apiRouter.post("/engine/mute", (req, res) => {
+  apiRouter.post("/engine/mute", requireAuth, (req, res) => {
     const { symbol, durationMs } = req.body;
     mutedAssets[symbol] = Date.now() + (durationMs || COOLDOWN_MS);
+    if (supabase) {
+      supabase.from('app_config').upsert({ key: 'mutedAssets', value: mutedAssets });
+    }
     res.json({ success: true, mutedAssets });
   });
-  apiRouter.post("/engine/unmute", (req, res) => {
+  apiRouter.post("/engine/unmute", requireAuth, (req, res) => {
     const { symbol } = req.body;
     if (symbol) {
       delete mutedAssets[symbol];
     } else {
       mutedAssets = {};
     }
+    if (supabase) {
+      supabase.from('app_config').upsert({ key: 'mutedAssets', value: mutedAssets });
+    }
     res.json({ success: true, mutedAssets });
   });
-  apiRouter.delete("/signals/:id", async (req, res) => {
+  apiRouter.delete("/signals/:id", requireAuth, async (req, res) => {
     const { id } = req.params;
     const signal = activeSignals.find(s => s.id === id);
     if (signal) {

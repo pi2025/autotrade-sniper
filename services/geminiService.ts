@@ -9,7 +9,7 @@ const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const generateSignalExplanation = async (signal: Signal): Promise<{text: string, sources: any[]}> => {
   const ai = getAI();
-  const modelName = 'gemini-3-flash-preview'; // Plus rapide et économique
+  const modelName = 'gemini-2.5-flash'; // Plus rapide et économique
 
   // Récupération des dernières bougies pour le contexte visuel
   const lastPrices = signal.indicators.lastPrices || [];
@@ -60,7 +60,7 @@ export const generateSignalExplanation = async (signal: Signal): Promise<{text: 
     if (error.message?.includes("403") || error.message?.toLowerCase().includes("permission")) {
       try {
         const fallbackResponse = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview', // Modèle plus léger pour le fallback
+          model: 'gemini-2.5-flash', // Modèle plus léger pour le fallback
           contents: prompt + "\n\nNote: Analyse effectuée sans recherche web temps-réel (Accès Search 403).",
         });
         return { 
