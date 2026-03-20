@@ -9,6 +9,8 @@ import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
 import { isHighImpactEventSoon } from "./services/economicCalendarService.ts";
 import { testConnection, placeOrder } from "./services/oandaService.ts";
+import { generateSignalExplanation } from "./services/geminiService.ts";
+import { getUpcomingHighImpactEvents } from "./services/economicCalendarService.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -477,6 +479,14 @@ async function startServer() {
     } else {
       res.status(404).json({ error: "Signal non trouvé" });
     }
+  });
+
+  apiRouter.post("/signals/:id/analyze", async (req, res) => {
+    const signal = activeSignals.find(s => s.id === req.params.id);
+    if (!signal) return res.status(404).json({ error: "Signal non trouvé" });
+    const events = await getUpcomingHighImpactEvents(24);
+    const result = await generateSignalExplanation(signal, events);
+    res.json(result); // { text, sources, macroScore }
   });
 
   apiRouter.post("/signals/:id/execute", requireAuth, async (req, res) => {
