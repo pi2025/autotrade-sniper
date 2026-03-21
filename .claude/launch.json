@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "AutoTrade Dev Server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--env-file=.env", "node_modules/tsx/dist/cli.mjs", "server.ts"],
+      "port": 3000
+    }
+  ]
+}
