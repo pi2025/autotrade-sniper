@@ -8,7 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
 import { isHighImpactEventSoon } from "./services/economicCalendarService.ts";
-import { testConnection, placeOrder, getAccountBalance, closeOrder, getOpenTrades } from "./services/oandaService.ts";
+import { testConnection, placeOrder, getAccountBalance, closeOrder, getOpenTrades } from "./services/ctraderService.ts";
 import { generateSignalExplanation } from "./services/geminiService.ts";
 import { getUpcomingHighImpactEvents } from "./services/economicCalendarService.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
