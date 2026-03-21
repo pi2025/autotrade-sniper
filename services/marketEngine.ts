@@ -222,7 +222,25 @@ export const calculateIndicators = (
     maShort, maLong, maSlope: maShort - maLong, atr, adx, adxSlope, donchian, rsi, 
     ema20, ema50, ema200, emaH4, bollingerBands,
     trendContext: lastPrice > ema200 ? 'BULLISH' : 'BEARISH',
-    volumeTrend: 'NEUTRAL', marketPhase: MarketPhase.MARKUP,
+    volumeTrend: (() => {
+      if (!volumes || volumes.length < 40) return 'NEUTRAL' as const;
+      const recentVol = volumes.slice(-10).reduce((a, b) => a + b, 0) / 10;
+      const avgVol = volumes.slice(-40).reduce((a, b) => a + b, 0) / 40;
+      if (recentVol > avgVol * 1.3) return 'HIGH' as const;
+      if (recentVol < avgVol * 0.7) return 'LOW' as const;
+      return 'NEUTRAL' as const;
+    })(),
+    marketPhase: (() => {
+      // Wyckoff-inspired : prix vs EMAs + ADX
+      const aboveEma200 = lastPrice > ema200;
+      const aboveEma50 = lastPrice > ema50;
+      if (aboveEma200 && aboveEma50 && adx > 25) return MarketPhase.MARKUP;
+      if (!aboveEma200 && !aboveEma50 && adx > 25) return MarketPhase.MARKDOWN;
+      if (aboveEma200 && !aboveEma50) return MarketPhase.DISTRIBUTION;
+      if (!aboveEma200 && aboveEma50) return MarketPhase.ACCUMULATION;
+      // ADX faible = range → distribution ou accumulation selon la position
+      return aboveEma200 ? MarketPhase.DISTRIBUTION : MarketPhase.ACCUMULATION;
+    })(),
     chandelierExit,
     choppiness,
     lastPrices: closes.slice(-20), // On garde les 20 derniers prix pour l'IA
@@ -272,7 +290,7 @@ export const analyzeMarket = (
 
   if (!mtfOk) return { signal: null, diagnostic: "Rejet: Désalignement Temporel M15/H4" };
   if (!isNotChoppy) return { signal: null, diagnostic: `Rejet: Marché trop haché (Choppiness: ${ind.choppiness.toFixed(1)})` };
-  if (!ind.bollingerBands.isSqueezing) return { signal: null, diagnostic: `Rejet: Volatilité explosive (No Squeeze)` };
+  // Bollinger Squeeze = bonus de qualité, pas un bloqueur (trop restrictif sinon)
   if (!isAdxStrong) return { signal: null, diagnostic: `Rejet: ADX ${ind.adx.toFixed(1)} < ${strategy.adxThreshold}` };
   if (!isAdxRising) return { signal: null, diagnostic: "Rejet: Momentum en baisse" };
   if (!isWidening) return { signal: null, diagnostic: "Rejet: Tendance s'essouffle (Fan narrowing)" };
@@ -294,14 +312,28 @@ export const analyzeMarket = (
     return { signal: null, diagnostic: `Rejet: ${reason}` };
   }
 
-  const winProbability = Math.floor(68 + Math.min(ind.adx/5, 12));
+  // Score composite réel basé sur la qualité des conditions
+  let qualityScore = 50; // base neutre
+  // ADX fort et croissant = meilleure probabilité
+  qualityScore += Math.min((ind.adx - strategy.adxThreshold) * 1.5, 15);
+  // Choppiness bas = tendance propre
+  qualityScore += ind.choppiness < 40 ? 10 : ind.choppiness < 50 ? 5 : 0;
+  // Fan widening = momentum croissant
+  qualityScore += isWidening ? 5 : 0;
+  // MTF alignment = confirmation multi-timeframe
+  qualityScore += mtfOk ? 8 : 0;
+  // Bollinger squeeze = compression avant expansion
+  qualityScore += ind.bollingerBands.isSqueezing ? 7 : 0;
+  // RSI dans zone saine (pas extrême)
+  qualityScore += (ind.rsi > 35 && ind.rsi < 65) ? 5 : 0;
+  const winProbability = Math.max(40, Math.min(95, Math.floor(qualityScore)));
 
   const atrBuffer = ind.atr * strategy.stopLossAtrMultiplier;
   const stopLoss = type === SignalType.BUY ? price - atrBuffer : price + atrBuffer;
   const riskDistance = Math.abs(price - stopLoss);
   
-  // V18 Titan: Objectif TP très lointain pour laisser le Trailing Stop (Chandelier) faire le travail.
-  const rrRatio = 10; 
+  // TP réaliste : 3R pour forex, atteignable en M15/H1. Le Chandelier Exit trailing stop ferme avant si nécessaire.
+  const rrRatio = 3;
   const takeProfit = type === SignalType.BUY ? price + (riskDistance * rrRatio) : price - (riskDistance * rrRatio);
   
   let estimatedDuration = "~3-8 Jours";
@@ -315,23 +347,24 @@ export const analyzeMarket = (
   }
 
   return {
-    diagnostic: "🎯 Signal TITAN V18 Validé !",
+    diagnostic: `🎯 Signal validé (score: ${winProbability}%)`,
     signal: {
       type, 
       strength: winProbability, 
       winProbability, 
       reasoning: [
-        `Tendance de fond H4 confirmée`,
-        `Compression de Volatilité (Squeeze)`,
+        `Tendance de fond H4 confirmée (${ind.mtfAlignment?.h4})`,
         `Triple EMA Fan (20/50/200) aligné`,
-        `Momentum ADX puissant et croissant (${ind.adx.toFixed(1)})`,
-        `Stop-loss large pour absorber la volatilité`
+        `Momentum ADX: ${ind.adx.toFixed(1)} (${ind.adxSlope})`,
+        `Choppiness: ${ind.choppiness.toFixed(1)} — marché tendanciel`,
+        ...(ind.bollingerBands.isSqueezing ? [`Compression de Volatilité (Squeeze) détectée`] : []),
       ],
       scoreBreakdown: [
-        {label: 'Alignement H4', score: 35, type: 'POSITIVE'},
-        {label: 'Squeeze Volatilité', score: 25, type: 'POSITIVE'},
-        {label: 'Triple Fan', score: 20, type: 'POSITIVE'},
-        {label: 'Momentum ADX', score: 20, type: 'POSITIVE'}
+        {label: 'Alignement H4', score: 30, type: 'POSITIVE'},
+        {label: 'Triple Fan', score: 25, type: 'POSITIVE'},
+        {label: 'Momentum ADX', score: 25, type: 'POSITIVE'},
+        ...(ind.bollingerBands.isSqueezing ? [{label: 'Squeeze Volatilité', score: 15, type: 'POSITIVE' as const}] : []),
+        {label: 'Choppiness bas', score: ind.choppiness < 40 ? 10 : 5, type: ind.choppiness < 45 ? 'POSITIVE' as const : 'NEUTRAL' as const},
       ],
       estimatedDuration,
       tradeSetup: {

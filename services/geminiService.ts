@@ -101,7 +101,7 @@ export const generateSignalExplanation = async (
 export const createAnalystChat = (signal: Signal): Chat => {
   const ai = getAI();
   return ai.chats.create({
-    model: 'gemini-3-pro-preview',
+    model: 'gemini-2.5-flash',
     config: {
         systemInstruction: `Tu es Quantum Sniper. Aide l'utilisateur sur le signal ${signal.asset}.`,
     },

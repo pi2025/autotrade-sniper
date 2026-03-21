@@ -61,10 +61,10 @@ let riskLimits = {
   maxConcurrentTrades: 3,   // max trades ouverts simultanément
   maxTotalRiskPercent:  5,  // max % du capital engagé en même temps
   maxDrawdownPercent:  15,  // suspension si drawdown > X% depuis capital initial
-  initialCapital:       0,  // chargé depuis OANDA au 1er démarrage
+  initialCapital:       0,  // chargé depuis le broker au 1er démarrage
 };
-// signalId → oandaTradeId (stockage en mémoire, non persisté)
-const oandaTradeIds = new Map<string, string>();
+// signalId → brokerTradeId (stockage en mémoire, non persisté)
+const brokerTradeIds = new Map<string, string>();
 const MAX_CURRENCY_EXPOSURE = 2;
 const MAX_LOGS = 50;
 const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
@@ -199,16 +199,16 @@ async function emergencyStop(triggeredBy: string): Promise<string> {
   isEngineRunning = false;
   if (supabase) supabase.from('app_config').upsert({ key: 'agentMode', value: 'signals' });
 
-  // 2. Fermer tous les trades ouverts sur OANDA
-  const oandaTrades = await getOpenTrades();
+  // 2. Fermer tous les trades ouverts sur le broker
+  const openTrades = await getOpenTrades();
   let closed = 0, failed = 0;
-  for (const trade of oandaTrades) {
+  for (const trade of openTrades) {
     const result = await closeOrder(trade.tradeId);
     result.success ? closed++ : failed++;
   }
 
-  // 3. Vider oandaTradeIds en mémoire
-  oandaTradeIds.clear();
+  // 3. Vider brokerTradeIds en mémoire
+  brokerTradeIds.clear();
 
   const summary =
     `🚨 *EMERGENCY STOP* — Déclenché par: ${triggeredBy}\n` +
@@ -227,10 +227,10 @@ async function checkRiskLimits(): Promise<{ allowed: boolean; reason: string }> 
     return { allowed: false, reason: `Limite trades simultanés atteinte (${activeSignals.length}/${riskLimits.maxConcurrentTrades})` };
   }
 
-  // 2. Risque total engagé + 3. Drawdown (un seul appel OANDA)
+  // 2. Risque total engagé + 3. Drawdown (un seul appel broker)
   const acc = await getAccountBalance();
   if (acc) {
-    const riskPerTrade = parseFloat(process.env.OANDA_RISK_PERCENT || '1');
+    const riskPerTrade = parseFloat(process.env.CTRADER_RISK_PERCENT || '1');
     const totalRiskPercent = activeSignals.length * riskPerTrade;
     if (totalRiskPercent >= riskLimits.maxTotalRiskPercent) {
       return { allowed: false, reason: `Risque total max atteint (${totalRiskPercent}% ≥ ${riskLimits.maxTotalRiskPercent}%)` };
@@ -287,7 +287,7 @@ async function runBackgroundMonitor() {
         console.log(`🛡️ riskLimits restaurés:`, riskLimits);
       }
 
-      // Capital initial : récupéré une fois depuis OANDA, puis persisté
+      // Capital initial : récupéré une fois depuis le broker, puis persisté
       if (riskLimits.initialCapital === 0) {
         const acc = await getAccountBalance();
         if (acc) {
@@ -353,7 +353,9 @@ async function runBackgroundMonitor() {
             const hitSL = isBuy ? currentPrice <= Math.max(sl, chandelier) : currentPrice >= Math.min(sl, chandelier);
 
             if (hitTP || hitSL) {
-              const initialRisk = Math.abs(existing.priceAtSignal - (existing.tradeSetup.stopLoss || sl));
+              const originalSL = existing.originalStopLoss ?? existing.tradeSetup.stopLoss;
+              const initialRisk = Math.abs(existing.priceAtSignal - originalSL);
+              if (initialRisk === 0) continue; // Sécurité anti-division par zéro
               const pnl = (isBuy ? (currentPrice - existing.priceAtSignal) : (existing.priceAtSignal - currentPrice)) / initialRisk;
               const status = pnl > 0.1 ? SignalStatus.WIN : SignalStatus.LOSS;
               
@@ -400,7 +402,8 @@ async function runBackgroundMonitor() {
                 scoreBreakdown: result.scoreBreakdown,
                 estimatedDuration: result.estimatedDuration,
                 isNew: true,
-                isBreakevenSet: false
+                isBreakevenSet: false,
+                originalStopLoss: result.tradeSetup.stopLoss
               };
 
               const { isAllowed, reason } = checkCurrencyExposure(activeSignals, newSignal, MAX_CURRENCY_EXPOSURE);
@@ -439,10 +442,10 @@ async function runBackgroundMonitor() {
                     } else {
                     const orderResult = await placeOrder(newSignal);
                     if (orderResult.success && orderResult.tradeId) {
-                      oandaTradeIds.set(newSignal.id, orderResult.tradeId);
+                      brokerTradeIds.set(newSignal.id, orderResult.tradeId);
                       scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol,
                         status: 'AUTO_EXECUTED',
-                        reason: `🤖 Autonome — Confiance: ${newSignal.confidence}% ≥ ${AUTONOMOUS_MIN_CONFIDENCE}% — OANDA #${orderResult.tradeId} (${orderResult.units} units)`
+                        reason: `🤖 Autonome — Confiance: ${newSignal.confidence}% ≥ ${AUTONOMOUS_MIN_CONFIDENCE}% — cTrader #${orderResult.tradeId} (${orderResult.units} units)`
                       }, ...scanLogs].slice(0, MAX_LOGS);
                       await sendTelegramMessage(
                         `🤖 *EXÉCUTION AUTONOME* 🤖\n` +
@@ -450,7 +453,7 @@ async function runBackgroundMonitor() {
                         `*Action:* ${signalEmoji} ${newSignal.type === SignalType.BUY ? 'ACHAT' : 'VENTE'}\n` +
                         `*Entrée:* ${data.price.toFixed(5)}\n` +
                         `*TP:* ${newSignal.tradeSetup.takeProfit.toFixed(5)} | *SL:* ${newSignal.tradeSetup.stopLoss.toFixed(5)}\n` +
-                        `*Confiance:* ${newSignal.confidence}% | *OANDA:* \`${orderResult.tradeId}\``
+                        `*Confiance:* ${newSignal.confidence}% | *cTrader:* \`${orderResult.tradeId}\``
                       );
                     } else {
                       scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol,
@@ -671,12 +674,12 @@ async function startServer() {
     const { id } = req.params;
     const signal = activeSignals.find(s => s.id === id);
     if (!signal) return res.status(404).json({ error: "Signal non trouvé" });
-    if (oandaTradeIds.has(id)) return res.status(409).json({ error: "Signal déjà exécuté sur OANDA" });
+    if (brokerTradeIds.has(id)) return res.status(409).json({ error: "Signal déjà exécuté sur cTrader" });
 
     const result = await placeOrder(signal);
     if (result.success && result.tradeId) {
-      oandaTradeIds.set(id, result.tradeId);
-      console.log(`✅ Signal ${id} exécuté sur OANDA — tradeId: ${result.tradeId}`);
+      brokerTradeIds.set(id, result.tradeId);
+      console.log(`✅ Signal ${id} exécuté sur cTrader — tradeId: ${result.tradeId}`);
       return res.json({ success: true, tradeId: result.tradeId, units: result.units });
     }
     return res.status(500).json({ success: false, error: result.error });
@@ -719,17 +722,17 @@ async function startServer() {
         await sendTelegramMessage(`⚠️ Signal \`${signalId.slice(0, 8)}\` introuvable ou déjà clôturé.`);
         return;
       }
-      if (oandaTradeIds.has(signalId)) {
-        await sendTelegramMessage(`⚠️ Signal \`${signal.asset}\` déjà exécuté sur OANDA.`);
+      if (brokerTradeIds.has(signalId)) {
+        await sendTelegramMessage(`⚠️ Signal \`${signal.asset}\` déjà exécuté sur cTrader.`);
         return;
       }
       const result = await placeOrder(signal);
       if (result.success && result.tradeId) {
-        oandaTradeIds.set(signalId, result.tradeId);
+        brokerTradeIds.set(signalId, result.tradeId);
         await sendTelegramMessage(
           `✅ *ORDRE EXÉCUTÉ*\n` +
           `*Actif:* ${signal.asset}\n` +
-          `*OANDA Trade ID:* \`${result.tradeId}\`\n` +
+          `*cTrader Trade ID:* \`${result.tradeId}\`\n` +
           `*Taille:* ${result.units} units`
         );
       } else {
