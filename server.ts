@@ -590,6 +590,7 @@ async function startServer() {
       activeStrategyId: activeStrategy.id,
       mutedAssets,
       agentMode,
+      riskLimits,
     });
   });
   apiRouter.post("/engine/risk", requireAuth, async (req, res) => {
