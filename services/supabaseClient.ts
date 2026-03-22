@@ -1,8 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Récupération des variables d'environnement ou utilisation des identifiants fournis
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'https://bzrsuuynxsikczcbbycn.supabase.co';
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cnN1dXlueHNpa2N6Y2JieWNuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU1MzQxNTAsImV4cCI6MjA4MTExMDE1MH0.MkkltE__1eTrRuMO2ddyqq8F8L8VxXjwEOdRZ5SnOkg';
+// SÉCURITÉ : credentials via .env uniquement — jamais de fallback hardcodé
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_KEY || '';
 
 // Vérification si les clés sont configurées
 export const isConfigured = 

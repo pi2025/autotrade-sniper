@@ -192,8 +192,8 @@ export const calculateIndicators = (
   const atr = calculateATR(highs, lows, closes, 14);
   
   const adxValues = calculateADXValues(highs, lows, closes, 14);
-  const adx = adxValues[adxValues.length - 1] || 0;
-  const prevAdx = adxValues[adxValues.length - 2] || 0;
+  const adx = adxValues.length > 0 ? adxValues[adxValues.length - 1] : 0;
+  const prevAdx = adxValues.length > 1 ? adxValues[adxValues.length - 2] : 0;
   const adxSlope = adx > prevAdx ? 'RISING' : 'FALLING';
 
   const choppiness = calculateChoppiness(highs, lows, closes, 14);
@@ -298,7 +298,11 @@ export const analyzeMarket = (
   if (ind.rsi > 72) return { signal: null, diagnostic: `Rejet: RSI Sur-acheté (${ind.rsi.toFixed(1)})` };
   if (ind.rsi < 28) return { signal: null, diagnostic: `Rejet: RSI Sur-vendu (${ind.rsi.toFixed(1)})` };
 
-  const buffer = price * 0.001; 
+  // Guard ATR=0 — données insuffisantes ou marché fermé
+  if (!ind.atr || ind.atr <= 0) return { signal: null, diagnostic: "Rejet: ATR nul — données insuffisantes" };
+
+  // Buffer basé sur ATR (adaptif à la volatilité) au lieu de % fixe
+  const buffer = ind.atr * 0.15;
   let type = null;
   
   if (price > (ind.donchian.upper + buffer) && isBullFan) {

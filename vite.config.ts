@@ -22,12 +22,13 @@ export default defineConfig(({ mode }) => {
         }
       },
       define: {
-        // Injection sécurisée des clés API spécifiques
-        'process.env.API_KEY': JSON.stringify(env.API_KEY),
-        'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL),
-        'process.env.VITE_SUPABASE_KEY': JSON.stringify(env.VITE_SUPABASE_KEY),
-        // Fallback global (optionnel, mais gardé pour compatibilité rétroactive)
-        'process.env': JSON.stringify(env),
+        // SÉCURITÉ : injecter UNIQUEMENT les variables nécessaires côté client
+        // Jamais de secrets serveur (TELEGRAM_BOT_TOKEN, CTRADER_*, API_SECRET_TOKEN)
+        'process.env.API_KEY': JSON.stringify(env.API_KEY || ''),
+        'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || ''),
+        'process.env.VITE_SUPABASE_KEY': JSON.stringify(env.VITE_SUPABASE_KEY || ''),
+        'process.env.VITE_APP_PASSWORD': JSON.stringify(env.VITE_APP_PASSWORD || ''),
+        'process.env.CTRADER_ACCOUNT_ID': JSON.stringify(env.CTRADER_ACCOUNT_ID || ''),
       },
       build: {
         outDir: 'dist',

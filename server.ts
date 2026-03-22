@@ -71,7 +71,8 @@ const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
 // Seuil de confiance minimum pour l'exécution autonome (configurable via env)
 const AUTONOMOUS_MIN_CONFIDENCE = parseInt(process.env.AUTONOMOUS_MIN_CONFIDENCE || '75', 10);
 
-// Cache pour les données de marché
+// Cache pour les données de marché (plafonné à 50 entrées pour éviter les fuites mémoire)
+const MAX_CACHE_SIZE = 50;
 const marketCache = new Map<string, { data: any, expiry: number }>();
 const CACHE_DURATION = 60 * 1000;
 
@@ -182,6 +183,11 @@ async function fetchYahooInternal(symbol: string, interval: string = '15m', rang
         volumes: quote.volume ? validIndices.map((i: number) => quote.volume[i]) : new Array(validIndices.length).fill(0)
       };
 
+      // Éviction LRU si le cache dépasse la taille max
+      if (marketCache.size >= MAX_CACHE_SIZE) {
+        const oldestKey = marketCache.keys().next().value;
+        if (oldestKey) marketCache.delete(oldestKey);
+      }
       marketCache.set(cacheKey, { data, expiry: Date.now() + CACHE_DURATION });
       return data;
     } catch (error: any) {
@@ -545,12 +551,42 @@ async function startServer() {
 
   const apiRouter = express.Router();
 
+  // --- RATE LIMITER (in-memory, par IP) ---
+  const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+  const rateLimit = (maxRequests: number, windowMs: number) =>
+    (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+      const now = Date.now();
+      const entry = rateLimitMap.get(ip);
+      if (!entry || now > entry.resetAt) {
+        rateLimitMap.set(ip, { count: 1, resetAt: now + windowMs });
+        return next();
+      }
+      if (entry.count >= maxRequests) {
+        return res.status(429).json({ error: "Too many requests. Réessayez plus tard." });
+      }
+      entry.count++;
+      next();
+    };
+  // Nettoyage périodique des entrées expirées
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of rateLimitMap) {
+      if (now > entry.resetAt) rateLimitMap.delete(ip);
+    }
+  }, 60_000);
+
+  // Rate limit sur les endpoints sensibles : 10 req/min
+  const sensitiveRateLimit = rateLimit(10, 60_000);
+
   // --- MIDDLEWARE AUTH ---
   const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const secret = process.env.API_SECRET_TOKEN;
-    if (!secret) return next(); // Pas de token configuré = pas de protection (dev)
-    const auth = req.headers.authorization;
-    if (!auth || auth !== `Bearer ${secret}`) {
+    const appPassword = process.env.VITE_APP_PASSWORD || 'QUANTUM';
+    if (!secret && !appPassword) return next();
+    const auth = req.headers.authorization?.replace('Bearer ', '');
+    // Accepte le token serveur OU le mot de passe app (pour les appels depuis l'UI)
+    if (!auth || (auth !== secret && auth !== appPassword)) {
       return res.status(401).json({ error: "Unauthorized" });
     }
     next();
@@ -558,8 +594,16 @@ async function startServer() {
 
   // Endpoints API
   apiRouter.get("/health", (req, res) => {
-    console.log("GET /api/health");
-    res.json({ status: "ok", time: new Date().toISOString() });
+    res.json({
+      status: "ok",
+      time: new Date().toISOString(),
+      services: {
+        supabase: !!process.env.VITE_SUPABASE_URL,
+        telegram: !!process.env.TELEGRAM_BOT_TOKEN,
+        gemini: !!process.env.API_KEY,
+        ctrader: !!process.env.CTRADER_ACCESS_TOKEN,
+      },
+    });
   });
   apiRouter.get("/signals", (req, res) => {
     console.log("GET /api/signals");
@@ -601,7 +645,7 @@ async function startServer() {
     if (supabase) await supabase.from('app_config').upsert({ key: 'riskLimits', value: riskLimits });
     res.json({ success: true, riskLimits });
   });
-  apiRouter.post("/engine/mode", requireAuth, async (req, res) => {
+  apiRouter.post("/engine/mode", sensitiveRateLimit, requireAuth, async (req, res) => {
     const { mode } = req.body;
     const valid: AgentMode[] = ['signals', 'semi-auto', 'autonomous'];
     if (!valid.includes(mode)) {
@@ -671,7 +715,7 @@ async function startServer() {
     res.json(result); // { text, sources, macroScore }
   });
 
-  apiRouter.post("/signals/:id/execute", requireAuth, async (req, res) => {
+  apiRouter.post("/signals/:id/execute", sensitiveRateLimit, requireAuth, async (req, res) => {
     const { id } = req.params;
     const signal = activeSignals.find(s => s.id === id);
     if (!signal) return res.status(404).json({ error: "Signal non trouvé" });
@@ -754,7 +798,7 @@ async function startServer() {
   });
 
   // Emergency stop
-  apiRouter.post("/agent/emergency-stop", requireAuth, async (req, res) => {
+  apiRouter.post("/agent/emergency-stop", sensitiveRateLimit, requireAuth, async (req, res) => {
     const summary = await emergencyStop('API HTTP');
     res.json({ success: true, summary });
   });

@@ -347,9 +347,25 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
 
     syncWithServer();
-    intervalId = setInterval(syncWithServer, 10000); // Sync toutes les 10s
-    
-    return () => clearInterval(intervalId);
+    // 30s au lieu de 10s — le moteur serveur tourne en continu,
+    // pas besoin de poll agressif côté client (économie CPU/batterie)
+    intervalId = setInterval(syncWithServer, 30000);
+
+    // Pause polling quand l'onglet est masqué (économie batterie mobile)
+    const onVisibility = () => {
+      if (document.hidden) {
+        clearInterval(intervalId);
+      } else {
+        syncWithServer();
+        intervalId = setInterval(syncWithServer, 30000);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, []);
 
   const toggleEngine = async () => {

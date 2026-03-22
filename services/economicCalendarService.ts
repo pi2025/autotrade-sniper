@@ -85,7 +85,10 @@ async function fetchRawEvents(): Promise<EconomicEvent[]> {
       });
 
       if (!response.ok) {
-        console.warn(`⚠️ EconomicCalendar: HTTP ${response.status} pour ${url}`);
+        // 404 sur nextweek est normal en début de semaine (FF publie ~jeudi)
+        if (response.status !== 404) {
+          console.warn(`⚠️ EconomicCalendar: HTTP ${response.status} pour ${url}`);
+        }
         continue;
       }
 
