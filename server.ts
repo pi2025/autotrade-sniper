@@ -582,7 +582,7 @@ async function startServer() {
   // --- MIDDLEWARE AUTH ---
   const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const secret = process.env.API_SECRET_TOKEN;
-    const appPassword = process.env.VITE_APP_PASSWORD || 'QUANTUM';
+    const appPassword = process.env.VITE_APP_PASSWORD;
     if (!secret && !appPassword) return next();
     const auth = req.headers.authorization?.replace('Bearer ', '');
     // Accepte le token serveur OU le mot de passe app (pour les appels depuis l'UI)

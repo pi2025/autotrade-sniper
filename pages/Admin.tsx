@@ -8,8 +8,8 @@ import {
 import { STRATEGIES } from '../services/marketEngine';
 
 // Auth via le mot de passe app (seul secret disponible côté client, jamais le token serveur)
-const APP_PASSWORD = process.env.VITE_APP_PASSWORD || 'QUANTUM';
-const authHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${APP_PASSWORD}` };
+const APP_PASSWORD = process.env.VITE_APP_PASSWORD || '';
+const authHeaders = { 'Content-Type': 'application/json', ...(APP_PASSWORD ? { 'Authorization': `Bearer ${APP_PASSWORD}` } : {}) };
 
 // ─── Agent Mode Control ────────────────────────────────────────────────────────
 const AgentControlCenter: React.FC = () => {
@@ -224,7 +224,7 @@ const BrokerStatus: React.FC = () => {
             <div className="p-5 rounded-2xl border border-slate-800 bg-slate-950">
               <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Compte</p>
               <p className="text-sm font-black text-white font-mono">
-                {status?.accountId || process.env.CTRADER_ACCOUNT_ID || '—'}
+                {status?.accountId || '—'}
               </p>
               <p className="text-[9px] text-slate-500 mt-1">IC Markets Demo</p>
             </div>
