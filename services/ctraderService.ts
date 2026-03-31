@@ -57,17 +57,18 @@ const RISK_PERCENT   = parseFloat(process.env.CTRADER_RISK_PERCENT || '1') / 100
 const HOST = IS_LIVE ? 'live.ctraderapi.com' : 'demo.ctraderapi.com';
 const PORT = 5035; // Protobuf over TLS
 
-// --- PAYLOAD TYPE CONSTANTS (cTrader Open API 2.0) ---
+// --- PAYLOAD TYPE NAMES (cTrader Open API 2.0) ---
+// La lib @reiryoku/ctrader-layer v2 exige des noms string, pas des IDs numériques
 const PT = {
-  HEARTBEAT:           51,
-  APP_AUTH_REQ:        2100,
-  ACCOUNT_AUTH_REQ:    2102,
-  NEW_ORDER_REQ:       2106,
-  EXECUTION_EVENT:     2107,
-  CLOSE_POSITION_REQ:  2111,
-  SYMBOLS_LIST_REQ:    2114,
-  RECONCILE_REQ:       2122,
-  TRADER_REQ:          2149,
+  HEARTBEAT:           'ProtoHeartbeatEvent',
+  APP_AUTH_REQ:        'ProtoOAApplicationAuthReq',
+  ACCOUNT_AUTH_REQ:    'ProtoOAAccountAuthReq',
+  NEW_ORDER_REQ:       'ProtoOANewOrderReq',
+  EXECUTION_EVENT:     'ProtoOAExecutionEvent',       // 2126 (pas 2107)
+  CLOSE_POSITION_REQ:  'ProtoOAClosePositionReq',
+  SYMBOLS_LIST_REQ:    'ProtoOASymbolsListReq',
+  RECONCILE_REQ:       'ProtoOAReconcileReq',         // 2124 (pas 2122)
+  TRADER_REQ:          'ProtoOATraderReq',             // 2121 (pas 2149)
 } as const;
 
 // Trade side / Order type (cTrader enums)
