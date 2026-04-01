@@ -7,6 +7,7 @@ import {
   ArrowLeft, Bot, Calculator, ArrowUpRight, ArrowDownRight, Activity, Zap, Check, X, AlertTriangle, ExternalLink, Globe, Newspaper, Hourglass, Trash2, ShieldAlert
 } from 'lucide-react';
 import { YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Area, AreaChart, Line, CartesianGrid, ReferenceArea } from 'recharts';
+import { apiUrl } from '../services/api';
 
 const SignalDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -24,7 +25,7 @@ const SignalDetails: React.FC = () => {
     if (signal && !aiData.text && !loadingAi) {
       const fetchAi = async () => {
         setLoadingAi(true);
-        const res = await fetch(`/api/signals/${signal.id}/analyze`, { method: 'POST' });
+        const res = await fetch(apiUrl(`/api/signals/${signal.id}/analyze`), { method: 'POST' });
         const data = await res.json();
         setAiData(data);
         updateSignalExplanation(signal.id, data.text);

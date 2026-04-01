@@ -4,6 +4,7 @@ import { AssetConfig, MarketData, Signal, TimeFrame, AssetType, StrategyParams, 
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from '../services/marketEngine';
 import { fetchYahooData } from '../services/yahooService';
 import { fetchBinanceData } from '../services/binanceService';
+import { apiUrl } from '../services/api';
 import { supabase, isConfigured as isSupabaseConfigured } from '../services/supabaseClient';
 
 const generateId = () => {
@@ -274,7 +275,7 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const clearNotification = () => dispatch({ type: 'CLEAR_NOTIFICATION' });
   const deleteSignal = async (id: string, asset: string) => {
     try {
-      const res = await fetch(`/api/signals/${id}`, { method: 'DELETE' });
+      const res = await fetch(apiUrl(`/api/signals/${id}`), { method: 'DELETE' });
       if (res.ok) {
         dispatch({ type: 'DELETE_SIGNAL', payload: { id, asset } });
       }
@@ -290,10 +291,10 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
       console.log("🔄 Syncing with server...");
       try {
         const [sigsRes, histRes, statusRes, scannerRes] = await Promise.all([
-          fetch('/api/signals').catch(e => { console.error("Fetch /api/signals failed:", e); throw e; }),
-          fetch('/api/history').catch(e => { console.error("Fetch /api/history failed:", e); throw e; }),
-          fetch('/api/engine/status').catch(e => { console.error("Fetch /api/engine/status failed:", e); throw e; }),
-          fetch('/api/scanner').catch(e => { console.error("Fetch /api/scanner failed:", e); throw e; })
+          fetch(apiUrl('/api/signals')).catch(e => { console.error("Fetch /api/signals failed:", e); throw e; }),
+          fetch(apiUrl('/api/history')).catch(e => { console.error("Fetch /api/history failed:", e); throw e; }),
+          fetch(apiUrl('/api/engine/status')).catch(e => { console.error("Fetch /api/engine/status failed:", e); throw e; }),
+          fetch(apiUrl('/api/scanner')).catch(e => { console.error("Fetch /api/scanner failed:", e); throw e; })
         ]);
         console.log("✅ Fetch responses received", { 
           sigs: sigsRes.status, 
@@ -370,7 +371,7 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const toggleEngine = async () => {
     try {
-      const res = await fetch('/api/engine/toggle', { method: 'POST' });
+      const res = await fetch(apiUrl('/api/engine/toggle'), { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         dispatch({ type: 'SET_ENGINE', payload: data.isRunning });
@@ -385,7 +386,7 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
       updateSignalExplanation: (id: string, text: string) => dispatch({ type: 'UPDATE_SIGNAL_AI', payload: { id, text } }),
       setStrategy: async (id: string) => {
         try {
-          const res = await fetch('/api/engine/strategy', {
+          const res = await fetch(apiUrl('/api/engine/strategy'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ strategyId: id })
@@ -401,7 +402,7 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
       updateEmailConfig: (cfg: EmailConfig) => dispatch({ type: 'UPDATE_EMAIL_CONFIG', payload: cfg }),
       clearMuted: async () => {
         try {
-          const res = await fetch('/api/engine/unmute', { method: 'POST' });
+          const res = await fetch(apiUrl('/api/engine/unmute'), { method: 'POST' });
           if (res.ok) {
             dispatch({ type: 'CLEAR_MUTED' });
           }

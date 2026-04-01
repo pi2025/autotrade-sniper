@@ -6,6 +6,7 @@ import {
   ShieldAlert, Zap, Radio, TrendingDown, Lock, Unlock, BarChart2, Wifi, WifiOff, Power
 } from 'lucide-react';
 import { STRATEGIES } from '../services/marketEngine';
+import { apiUrl } from '../services/api';
 
 // Auth via le mot de passe app (seul secret disponible côté client, jamais le token serveur)
 const APP_PASSWORD = process.env.VITE_APP_PASSWORD || '';
@@ -21,7 +22,7 @@ const AgentControlCenter: React.FC = () => {
 
   const fetchMode = useCallback(async () => {
     try {
-      const res = await fetch('/api/engine/status');
+      const res = await fetch(apiUrl('/api/engine/status'));
       const data = await res.json();
       if (data.agentMode) setMode(data.agentMode);
       if (data.riskLimits) setRiskLimits(data.riskLimits);
@@ -33,7 +34,7 @@ const AgentControlCenter: React.FC = () => {
   const changeMode = async (newMode: 'signals' | 'semi-auto' | 'autonomous') => {
     setSaving(true);
     try {
-      await fetch('/api/engine/mode', { method: 'POST', headers: authHeaders, body: JSON.stringify({ mode: newMode }) });
+      await fetch(apiUrl('/api/engine/mode'), { method: 'POST', headers: authHeaders, body: JSON.stringify({ mode: newMode }) });
       setMode(newMode);
       setStatusMsg(`✅ Mode changé → ${newMode.toUpperCase()}`);
     } catch { setStatusMsg('❌ Erreur réseau'); }
@@ -44,7 +45,7 @@ const AgentControlCenter: React.FC = () => {
   const saveRisk = async () => {
     setSaving(true);
     try {
-      await fetch('/api/engine/risk', { method: 'POST', headers: authHeaders, body: JSON.stringify(riskLimits) });
+      await fetch(apiUrl('/api/engine/risk'), { method: 'POST', headers: authHeaders, body: JSON.stringify(riskLimits) });
       setStatusMsg('✅ Limites de risque sauvegardées');
     } catch { setStatusMsg('❌ Erreur réseau'); }
     setSaving(false);
@@ -55,7 +56,7 @@ const AgentControlCenter: React.FC = () => {
     if (!confirm('⚠️ ARRÊT D\'URGENCE — Fermer toutes les positions et désactiver le mode autonome ?')) return;
     setStopping(true);
     try {
-      await fetch('/api/agent/emergency-stop', { method: 'POST', headers: authHeaders });
+      await fetch(apiUrl('/api/agent/emergency-stop'), { method: 'POST', headers: authHeaders });
       setMode('signals');
       setStatusMsg('🛑 Arrêt d\'urgence exécuté. Mode → SIGNALS');
     } catch { setStatusMsg('❌ Erreur lors de l\'arrêt d\'urgence'); }
@@ -171,7 +172,7 @@ const BrokerStatus: React.FC = () => {
   const fetchStatus = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/broker/status');
+      const res = await fetch(apiUrl('/api/broker/status'));
       setStatus(await res.json());
     } catch { setStatus({ connected: false, error: 'Connexion impossible au serveur' }); }
     setLoading(false);
@@ -256,7 +257,7 @@ const Admin: React.FC = () => {
   const [services, setServices] = useState<{ supabase: boolean; telegram: boolean; gemini: boolean; ctrader: boolean } | null>(null);
 
   useEffect(() => {
-    fetch('/api/health').then(r => r.json()).then(d => setServices(d.services)).catch(() => {});
+    fetch(apiUrl('/api/health')).then(r => r.json()).then(d => setServices(d.services)).catch(() => {});
   }, []);
 
   useEffect(() => {
