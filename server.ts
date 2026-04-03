@@ -503,7 +503,7 @@ async function runBackgroundMonitor() {
 
     lastScanTime = Date.now();
     lastBatchTimeMs = Date.now() - startTime;
-    await new Promise(r => setTimeout(r, 15 * 60 * 1000)); // Scan toutes les 15 min (aligné avec M15)
+    await new Promise(r => setTimeout(r, 5 * 60 * 1000)); // Scan toutes les 5 min — détection rapide des breakouts
   }
 }
 
