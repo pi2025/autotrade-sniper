@@ -77,6 +77,7 @@ const ORDER_TYPE = { MARKET: 1 } as const;
 
 // --- MAPPING Yahoo Finance → nom de symbole cTrader (IC Markets) ---
 const SYMBOL_MAP: Record<string, string> = {
+  // Forex - Majors
   'EURUSD=X': 'EURUSD',
   'GBPUSD=X': 'GBPUSD',
   'USDJPY=X': 'USDJPY',
@@ -84,12 +85,28 @@ const SYMBOL_MAP: Record<string, string> = {
   'USDCAD=X': 'USDCAD',
   'USDCHF=X': 'USDCHF',
   'NZDUSD=X': 'NZDUSD',
+  // Forex - Crosses
   'EURGBP=X': 'EURGBP',
   'EURJPY=X': 'EURJPY',
+  'EURAUD=X': 'EURAUD',
+  'EURCHF=X': 'EURCHF',
   'GBPJPY=X': 'GBPJPY',
+  'AUDJPY=X': 'AUDJPY',
+  'CHFJPY=X': 'CHFJPY',
+  'EURNZD=X': 'EURNZD',
+  'GBPAUD=X': 'GBPAUD',
+  'CADJPY=X': 'CADJPY',
+  // Crypto (IC Markets cTrader)
+  'BTC-USD':  'BTCUSD',
+  'ETH-USD':  'ETHUSD',
+  'SOL-USD':  'SOLUSD',
+  'BNB-USD':  'BNBUSD',
+  'XRP-USD':  'XRPUSD',
+  // Matières premières
   'GC=F':     'XAUUSD',
   'SI=F':     'XAGUSD',
   'CL=F':     'XTIUSD',   // WTI Crude Oil sur IC Markets cTrader
+  // Indices
   '^GSPC':    'US500',     // S&P 500
   '^IXIC':    'USTEC',     // NASDAQ
   '^FCHI':    'FRA40',     // CAC 40
