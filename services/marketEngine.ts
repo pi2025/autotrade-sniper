@@ -7,32 +7,32 @@ export const STRATEGIES: StrategyParams[] = [
     name: 'V18 Titan (Stabilized)',
     description: 'Filtres de tendance stricts. SL large (ATR 2.8x) et Breakout sur 12h pour ignorer le bruit du marché.',
     maShortPeriod: 20,
-    maLongPeriod: 50, 
-    adxThreshold: 32, // Plus strict
+    maLongPeriod: 50,
+    adxThreshold: 25, // Seuil standard institutionnel (>25 = tendance forte)
     entryType: 'DONCHIAN_BREAKOUT',
     donchianPeriod: 50, // Période plus longue (~12.5h)
     stopLossAtrMultiplier: 2.8, // SL plus large
-    exitType: 'ATR_TRAIL', 
-    riskPerTradePercent: 0.5, 
+    exitType: 'ATR_TRAIL',
+    riskPerTradePercent: 0.5,
     capitalBase: 10000,
-    breakevenTriggerR: 1.2, // Breakeven un peu plus tardif
+    breakevenTriggerR: 1.5, // Breakeven tardif — laisse le trade respirer
     exitLogic: 'ATR_TRAIL',
-    maxHoldPeriod: 400, // Permet aux trades de durer plus longtemps
+    maxHoldPeriod: 400,
   },
   {
     id: 'forex_sniper_v15_quantum',
     name: 'V15 Sniper Quantum',
-    description: 'Algorithme Sniper optimisé. Filtrage ADX/Slope Strict + Choppiness + Fan Widening.',
+    description: 'Algorithme Sniper optimisé. Filtrage ADX + Choppiness + Fan Widening. TP 2R réaliste.',
     maShortPeriod: 10,
-    maLongPeriod: 30, 
-    adxThreshold: 28,
+    maLongPeriod: 30,
+    adxThreshold: 22, // Seuil abaissé : >20 = tendance présente (littérature Wilder)
     entryType: 'DONCHIAN_BREAKOUT',
     donchianPeriod: 24,
     stopLossAtrMultiplier: 2.0,
-    exitType: 'ATR_TRAIL', 
-    riskPerTradePercent: 1.0, 
+    exitType: 'ATR_TRAIL',
+    riskPerTradePercent: 1.0,
     capitalBase: 10000,
-    breakevenTriggerR: 1.0,
+    breakevenTriggerR: 1.5, // Breakeven à 1.5R — évite les sorties à 0 sur pullback normal
     exitLogic: 'ATR_TRAIL',
     maxHoldPeriod: 200,
   }
@@ -210,13 +210,23 @@ export const calculateIndicators = (
     : lowestLow + (atr * strategy.stopLossAtrMultiplier);
 
   const m15Trend = lastPrice > ema50 ? 'BULL' : 'BEAR';
-  const h4Trend = lastPrice > emaH4 ? 'BULL' : 'BEAR';
+  // H4 trend basé sur EMA200 (standard institutionnel) au lieu de EMA800 (trop lent, trop de faux rejets)
+  const h4Trend = lastPrice > ema200 ? 'BULL' : 'BEAR';
 
-  const ema20_prev = calculateEMA(closes.slice(0, -1), 20);
-  const ema50_prev = calculateEMA(closes.slice(0, -1), 50);
-  const currentSpread = Math.abs(ema20 - ema50);
-  const prevSpread = Math.abs(ema20_prev - ema50_prev);
-  const isWidening = currentSpread > prevSpread;
+  // Fan Widening : moyenne du spread EMA20/50 sur 5 bougies vs 10 bougies
+  // Plus stable qu'une comparaison bougie-à-bougie (évite les faux rejets sur micro-pullback)
+  const spreadRecent: number[] = [];
+  const spreadOlder: number[] = [];
+  for (let i = 1; i <= 10; i++) {
+    const e20 = calculateEMA(closes.slice(0, -i), 20);
+    const e50 = calculateEMA(closes.slice(0, -i), 50);
+    const sp = Math.abs(e20 - e50);
+    if (i <= 5) spreadRecent.push(sp);
+    spreadOlder.push(sp);
+  }
+  const avgSpreadRecent = spreadRecent.reduce((a, b) => a + b, 0) / spreadRecent.length;
+  const avgSpreadOlder = spreadOlder.reduce((a, b) => a + b, 0) / spreadOlder.length;
+  const isWidening = avgSpreadRecent > avgSpreadOlder;
 
   return {
     maShort, maLong, maSlope: maShort - maLong, atr, adx, adxSlope, donchian, rsi, 
@@ -336,8 +346,8 @@ export const analyzeMarket = (
   const stopLoss = type === SignalType.BUY ? price - atrBuffer : price + atrBuffer;
   const riskDistance = Math.abs(price - stopLoss);
   
-  // TP réaliste : 3R pour forex, atteignable en M15/H1. Le Chandelier Exit trailing stop ferme avant si nécessaire.
-  const rrRatio = 3;
+  // TP réaliste : 2R pour M15 — atteignable avant que le trailing stop ne ferme le trade
+  const rrRatio = 2;
   const takeProfit = type === SignalType.BUY ? price + (riskDistance * rrRatio) : price - (riskDistance * rrRatio);
   
   let estimatedDuration = "~3-8 Jours";

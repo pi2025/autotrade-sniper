@@ -337,8 +337,18 @@ async function runBackgroundMonitor() {
             // --- SUIVI DU TRADE EXISTANT ---
             const currentPrice = data.price;
             const isBuy = existing.type === SignalType.BUY;
+
+            // Trailing stop via Chandelier Exit — ne bouge que dans la direction favorable
+            // (monte pour BUY, descend pour SELL). Ne recule jamais.
             const chandelier = indicators.chandelierExit;
-            
+            const currentSL = existing.tradeSetup.stopLoss;
+
+            if (isBuy && chandelier > currentSL) {
+              existing.tradeSetup.stopLoss = chandelier;
+            } else if (!isBuy && chandelier < currentSL) {
+              existing.tradeSetup.stopLoss = chandelier;
+            }
+
             // 1. Check Breakeven
             if (!existing.isBreakevenSet && existing.tradeSetup.breakevenPrice) {
               const reached = isBuy ? currentPrice >= existing.tradeSetup.breakevenPrice : currentPrice <= existing.tradeSetup.breakevenPrice;
@@ -352,11 +362,11 @@ async function runBackgroundMonitor() {
               }
             }
 
-            // 2. Check Sortie (TP/SL)
+            // 2. Check Sortie (TP/SL) — le SL courant intègre déjà le trailing
             const target = existing.tradeSetup.takeProfit;
             const sl = existing.tradeSetup.stopLoss;
             const hitTP = isBuy ? currentPrice >= target : currentPrice <= target;
-            const hitSL = isBuy ? currentPrice <= Math.max(sl, chandelier) : currentPrice >= Math.min(sl, chandelier);
+            const hitSL = isBuy ? currentPrice <= sl : currentPrice >= sl;
 
             if (hitTP || hitSL) {
               const originalSL = existing.originalStopLoss ?? existing.tradeSetup.stopLoss;
@@ -493,7 +503,7 @@ async function runBackgroundMonitor() {
 
     lastScanTime = Date.now();
     lastBatchTimeMs = Date.now() - startTime;
-    await new Promise(r => setTimeout(r, 5 * 60 * 1000)); // Scan toutes les 5 min
+    await new Promise(r => setTimeout(r, 15 * 60 * 1000)); // Scan toutes les 15 min (aligné avec M15)
   }
 }
 
