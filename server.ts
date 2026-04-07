@@ -12,6 +12,11 @@ import { testConnection, placeOrder, getAccountBalance, closeOrder, getOpenTrade
 import { generateSignalExplanation } from "./services/geminiService.ts";
 import { getUpcomingHighImpactEvents } from "./services/economicCalendarService.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
+import { runScreener } from "./services/agents/screenerAgent.ts";
+import { runTechnicalAnalysis } from "./services/agents/technicalAgent.ts";
+import { runMacroAnalysis } from "./services/agents/macroAgent.ts";
+import { runRiskCheck } from "./services/agents/riskAgent.ts";
+import { runDecisionAgent } from "./services/agents/decisionAgent.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -144,9 +149,28 @@ const checkCurrencyExposure = (openSignals: Signal[], newSignal: Signal, thresho
   return { isAllowed: true, reason: '' };
 };
 
+// Cache durations par timeframe
+const CACHE_TTL: Record<string, number> = { '1h': 10 * 60 * 1000, '15m': 60 * 1000 };
+
+interface MultiTFData {
+  h1: { price: number; history: number[]; highs: number[]; lows: number[]; opens: number[]; volumes: number[] };
+  m15: { price: number; history: number[]; highs: number[]; lows: number[]; opens: number[]; volumes: number[] };
+  symbol: string;
+  price: number;
+}
+
+async function fetchMultiTimeframe(symbol: string): Promise<MultiTFData> {
+  const [h1, m15] = await Promise.all([
+    fetchYahooInternal(symbol, '1h', '60d'),
+    fetchYahooInternal(symbol, '15m', '15d'),
+  ]);
+  return { h1, m15, symbol, price: m15.price };
+}
+
 async function fetchYahooInternal(symbol: string, interval: string = '15m', range: string = '15d', retries: number = 3) {
   const cacheKey = `${symbol}_${interval}_${range}`;
   const cached = marketCache.get(cacheKey);
+  const ttl = CACHE_TTL[interval] || CACHE_DURATION;
   if (cached && cached.expiry > Date.now()) return cached.data;
 
   const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}&events=history&includeAdjustedClose=true`;
@@ -188,7 +212,7 @@ async function fetchYahooInternal(symbol: string, interval: string = '15m', rang
         const oldestKey = marketCache.keys().next().value;
         if (oldestKey) marketCache.delete(oldestKey);
       }
-      marketCache.set(cacheKey, { data, expiry: Date.now() + CACHE_DURATION });
+      marketCache.set(cacheKey, { data, expiry: Date.now() + ttl });
       return data;
     } catch (error: any) {
       if (attempt === retries - 1) throw error;
@@ -318,187 +342,232 @@ async function runBackgroundMonitor() {
     const startTime = Date.now();
     console.log(`[${new Date().toLocaleTimeString()}] Scan en cours...`);
 
-    for (const asset of INITIAL_ASSETS) {
-      if (!asset.active) continue;
-
-      // Check Cooldown
-      const cooldownExpiry = mutedAssets[asset.symbol];
-      if (cooldownExpiry && Date.now() < cooldownExpiry) continue;
-
+    // === ÉTAPE 1 : SUIVI DES TRADES EXISTANTS (sur données M15 rapides) ===
+    for (const existing of [...activeSignals]) {
       try {
-        const data = await fetchYahooInternal(asset.symbol);
-        const indicators = calculateIndicators(data.history, data.highs, data.lows, data.opens, data.volumes, activeStrategy, asset.symbol);
-        
+        const data = await fetchYahooInternal(existing.asset);
+        const asset = INITIAL_ASSETS.find(a => a.symbol === existing.asset);
+        if (!data || !asset) continue;
+
+        const indicators = calculateIndicators(data.history, data.highs, data.lows, data.opens, data.volumes, activeStrategy, existing.asset);
         if (indicators) {
-          marketData[asset.symbol] = { ...data, lastIndicators: indicators };
-          const existing = activeSignals.find(s => s.asset === asset.symbol);
-          
-          if (existing) {
-            // --- SUIVI DU TRADE EXISTANT ---
-            const currentPrice = data.price;
-            const isBuy = existing.type === SignalType.BUY;
+          marketData[existing.asset] = { ...data, lastIndicators: indicators };
+        }
 
-            // Trailing stop via Chandelier Exit — ne bouge que dans la direction favorable
-            // (monte pour BUY, descend pour SELL). Ne recule jamais.
-            const chandelier = indicators.chandelierExit;
-            const currentSL = existing.tradeSetup.stopLoss;
+        const currentPrice = data.price;
+        const isBuy = existing.type === SignalType.BUY;
 
-            if (isBuy && chandelier > currentSL) {
-              existing.tradeSetup.stopLoss = chandelier;
-            } else if (!isBuy && chandelier < currentSL) {
-              existing.tradeSetup.stopLoss = chandelier;
+        // Trailing stop via Chandelier Exit
+        if (indicators) {
+          const chandelier = indicators.chandelierExit;
+          const currentSL = existing.tradeSetup.stopLoss;
+          if (isBuy && chandelier > currentSL) {
+            existing.tradeSetup.stopLoss = chandelier;
+          } else if (!isBuy && chandelier < currentSL) {
+            existing.tradeSetup.stopLoss = chandelier;
+          }
+        }
+
+        // Check Breakeven
+        if (!existing.isBreakevenSet && existing.tradeSetup.breakevenPrice) {
+          const reached = isBuy ? currentPrice >= existing.tradeSetup.breakevenPrice : currentPrice <= existing.tradeSetup.breakevenPrice;
+          if (reached) {
+            existing.tradeSetup.stopLoss = existing.priceAtSignal;
+            existing.isBreakevenSet = true;
+            if (supabase) {
+              await supabase.from('signals').update({ content: existing }).eq('id', existing.id);
+            }
+            await sendTelegramMessage(`🛡️ *BREAKEVEN ACTIVÉ* pour ${asset.name}\nLe Stop Loss a été déplacé au prix d'entrée (${existing.priceAtSignal.toFixed(5)}).`);
+          }
+        }
+
+        // Check Sortie (TP/SL)
+        const target = existing.tradeSetup.takeProfit;
+        const sl = existing.tradeSetup.stopLoss;
+        const hitTP = isBuy ? currentPrice >= target : currentPrice <= target;
+        const hitSL = isBuy ? currentPrice <= sl : currentPrice >= sl;
+
+        if (hitTP || hitSL) {
+          const originalSL = existing.originalStopLoss ?? existing.tradeSetup.stopLoss;
+          const initialRisk = Math.abs(existing.priceAtSignal - originalSL);
+          if (initialRisk === 0) continue;
+          const pnl = (isBuy ? (currentPrice - existing.priceAtSignal) : (existing.priceAtSignal - currentPrice)) / initialRisk;
+          const status = pnl > 0.1 ? SignalStatus.WIN : SignalStatus.LOSS;
+
+          const closedSignal = { ...existing, status, closePrice: currentPrice, closedAt: Date.now(), pnl: pnl - 0.05, isNew: false };
+          activeSignals = activeSignals.filter(s => s.id !== existing.id);
+          tradeHistory = [closedSignal, ...tradeHistory].slice(0, 200);
+
+          if (supabase) {
+            await supabase.from('signals').delete().eq('id', existing.id);
+            await supabase.from('history').insert({ id: existing.id, asset: existing.asset, pnl: closedSignal.pnl, content: closedSignal });
+          }
+
+          await sendTelegramMessage(`🏁 *TRADE CLÔTURÉ* 🏁\n*Actif:* ${asset.name}\n*Résultat:* ${status === SignalStatus.WIN ? '✅ GAIN' : '❌ PERTE'}\n*Profit:* ${closedSignal.pnl.toFixed(2)}R\n*Prix de sortie:* ${currentPrice.toFixed(5)}`);
+        }
+      } catch (error: any) {
+        console.error(`Error tracking ${existing.asset}:`, error.message);
+      }
+    }
+
+    // === ÉTAPE 2 : PIPELINE MULTI-AGENT IA POUR NOUVEAUX SIGNAUX ===
+    try {
+      // 2a. Récupérer les données multi-timeframe pour tous les actifs
+      const multiTFData = new Map<string, { h1: any; m15: any; price: number }>();
+      for (const asset of INITIAL_ASSETS) {
+        if (!asset.active) continue;
+        if (activeSignals.find(s => s.asset === asset.symbol)) continue; // Skip si trade déjà ouvert
+        try {
+          const mtf = await fetchMultiTimeframe(asset.symbol);
+          multiTFData.set(asset.symbol, mtf);
+          marketData[asset.symbol] = { ...mtf.m15, lastIndicators: null };
+          await new Promise(r => setTimeout(r, 500));
+        } catch (e: any) {
+          console.error(`MTF fetch failed for ${asset.symbol}:`, e.message);
+        }
+      }
+
+      // 2b. Agent 1 — Screener
+      const { candidates, rejected } = runScreener(INITIAL_ASSETS, multiTFData, activeStrategy, mutedAssets);
+      console.log(`📊 Screener: ${candidates.length} candidats, ${rejected.length} rejetés`);
+
+      for (const rej of rejected) {
+        if (Math.random() > 0.7) {
+          scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: rej.symbol, status: 'REJECTED', reason: `Screener: ${rej.reason}` }, ...scanLogs].slice(0, MAX_LOGS);
+        }
+      }
+
+      // 2c. Agents 2-5 pour chaque candidat (top 10 max pour économiser les appels IA)
+      const topCandidates = candidates.slice(0, 10);
+
+      for (const candidate of topCandidates) {
+        try {
+          // Agent 2 — Analyste Technique IA
+          const technical = await runTechnicalAnalysis(candidate);
+          if (technical.direction === 'NEUTRAL' || technical.score < 40) {
+            scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: candidate.asset.symbol, status: 'REJECTED', reason: `Tech IA: score ${technical.score}, dir ${technical.direction} — ${technical.reasoning}` }, ...scanLogs].slice(0, MAX_LOGS);
+            continue;
+          }
+
+          // Agent 3 — Analyste Macro IA
+          const macro = await runMacroAnalysis(candidate, technical);
+
+          // Agent 4 — Risk Manager
+          const risk = runRiskCheck(candidate, technical, macro, activeSignals);
+
+          // Agent 5 — Décideur Senior IA
+          const decision = await runDecisionAgent({ candidate, technical, macro, risk });
+
+          console.log(`🤖 Pipeline ${candidate.asset.symbol}: Tech=${technical.score} Macro=${macro.score} Risk=${risk.status} → ${decision.action} (${decision.confidence}%)`);
+
+          if (decision.action === 'SKIP') {
+            scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: candidate.asset.symbol, status: 'REJECTED', reason: `Pipeline IA: ${decision.aiVerdict}` }, ...scanLogs].slice(0, MAX_LOGS);
+            continue;
+          }
+
+          // === SIGNAL VALIDÉ PAR LE COMITÉ IA ===
+          const asset = candidate.asset;
+          const h1Ind = candidate.h1Indicators;
+          const riskR = Math.abs(candidate.price - decision.slPrice);
+          const rewardR = Math.abs(decision.tpPrice - candidate.price);
+
+          const newSignal: Signal = {
+            id: crypto.randomUUID(),
+            asset: asset.symbol,
+            assetType: asset.type,
+            type: decision.direction === 'BUY' ? SignalType.BUY : SignalType.SELL,
+            timestamp: Date.now(),
+            timeFrame: TimeFrame.H1,
+            priceAtSignal: candidate.price,
+            trendStrength: decision.confidence,
+            indicators: h1Ind,
+            tradeSetup: {
+              entryPrice: candidate.price,
+              stopLoss: decision.slPrice,
+              takeProfit: decision.tpPrice,
+              positionSizeUnit: 1,
+              riskAmount: decision.riskPercent,
+              riskRewardRatio: riskR > 0 ? rewardR / riskR : 0,
+              breakevenPrice: decision.direction === 'BUY'
+                ? candidate.price + h1Ind.atr * 1.5
+                : candidate.price - h1Ind.atr * 1.5,
+            },
+            reasoning: decision.reasoning,
+            aiExplanation: `🤖 Comité IA:\n• Tech: ${technical.reasoning} (${technical.score}/100)\n• Macro: ${macro.reasoning} (${macro.score}/100)\n• Risk: ${risk.reasons.join(', ')}\n• Verdict: ${decision.aiVerdict}`,
+            status: SignalStatus.OPEN,
+            confidence: decision.confidence,
+            winProbability: decision.confidence,
+            scoreBreakdown: [
+              { label: 'Screener', score: candidate.screenScore, type: candidate.screenScore > 60 ? 'POSITIVE' : 'NEUTRAL' as const },
+              { label: 'Technique IA', score: technical.score, type: technical.score > 60 ? 'POSITIVE' : 'NEUTRAL' as const },
+              { label: 'Macro IA', score: macro.score, type: macro.score > 60 ? 'POSITIVE' : macro.score < 40 ? 'NEGATIVE' : 'NEUTRAL' as const },
+              { label: 'Risk Manager', score: risk.status === 'APPROVED' ? 80 : 40, type: risk.status === 'APPROVED' ? 'POSITIVE' : 'NEGATIVE' as const },
+            ],
+            estimatedDuration: '4-12h',
+            isNew: true,
+            isBreakevenSet: false,
+            originalStopLoss: decision.slPrice,
+          };
+
+          const { isAllowed, reason } = checkCurrencyExposure(activeSignals, newSignal, MAX_CURRENCY_EXPOSURE);
+
+          if (isAllowed) {
+            activeSignals.push(newSignal);
+            scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'SUCCESS', reason: `Pipeline IA: ${decision.aiVerdict}` }, ...scanLogs].slice(0, MAX_LOGS);
+
+            if (supabase) {
+              await supabase.from('signals').insert({ id: newSignal.id, asset: newSignal.asset, timeframe: '1h', content: newSignal });
             }
 
-            // 1. Check Breakeven
-            if (!existing.isBreakevenSet && existing.tradeSetup.breakevenPrice) {
-              const reached = isBuy ? currentPrice >= existing.tradeSetup.breakevenPrice : currentPrice <= existing.tradeSetup.breakevenPrice;
-              if (reached) {
-                existing.tradeSetup.stopLoss = existing.priceAtSignal;
-                existing.isBreakevenSet = true;
-                if (supabase) {
-                  await supabase.from('signals').update({ content: existing }).eq('id', existing.id);
-                }
-                await sendTelegramMessage(`🛡️ *BREAKEVEN ACTIVÉ* pour ${asset.name}\nLe Stop Loss a été déplacé au prix d'entrée (${existing.priceAtSignal.toFixed(5)}).`);
-              }
-            }
+            const signalEmoji = newSignal.type === SignalType.BUY ? '🟢' : '🔴';
+            const semiAuto = agentMode === 'semi-auto';
+            await sendTelegramMessage(
+              `🚀 *SIGNAL SNIPER V15 — COMITÉ IA* 🚀\n` +
+              `*Actif:* ${asset.name}\n` +
+              `*Action:* ${signalEmoji} ${newSignal.type === SignalType.BUY ? 'ACHAT' : 'VENTE'}\n` +
+              `*Entrée:* ${candidate.price.toFixed(5)}\n` +
+              `*TP:* ${decision.tpPrice.toFixed(5)} | *SL:* ${decision.slPrice.toFixed(5)}\n` +
+              `*Confiance:* ${decision.confidence}% | *R:R:* ${newSignal.tradeSetup.riskRewardRatio.toFixed(1)}\n` +
+              `*Type:* ${technical.entryType}\n` +
+              `*Macro:* ${macro.alertLevel} ${macro.bias}`,
+              semiAuto ? [[
+                { text: '✅ Valider', callback_data: `execute:${newSignal.id}` },
+                { text: '❌ Ignorer', callback_data: `ignore:${newSignal.id}` },
+              ]] : undefined
+            );
 
-            // 2. Check Sortie (TP/SL) — le SL courant intègre déjà le trailing
-            const target = existing.tradeSetup.takeProfit;
-            const sl = existing.tradeSetup.stopLoss;
-            const hitTP = isBuy ? currentPrice >= target : currentPrice <= target;
-            const hitSL = isBuy ? currentPrice <= sl : currentPrice >= sl;
-
-            if (hitTP || hitSL) {
-              const originalSL = existing.originalStopLoss ?? existing.tradeSetup.stopLoss;
-              const initialRisk = Math.abs(existing.priceAtSignal - originalSL);
-              if (initialRisk === 0) continue; // Sécurité anti-division par zéro
-              const pnl = (isBuy ? (currentPrice - existing.priceAtSignal) : (existing.priceAtSignal - currentPrice)) / initialRisk;
-              const status = pnl > 0.1 ? SignalStatus.WIN : SignalStatus.LOSS;
-              
-              const closedSignal = { ...existing, status, closePrice: currentPrice, closedAt: Date.now(), pnl: pnl - 0.05, isNew: false };
-              
-              // Persistance
-              activeSignals = activeSignals.filter(s => s.id !== existing.id);
-              tradeHistory = [closedSignal, ...tradeHistory].slice(0, 200);
-              
-              if (supabase) {
-                await supabase.from('signals').delete().eq('id', existing.id);
-                await supabase.from('history').insert({ id: existing.id, asset: existing.asset, pnl: closedSignal.pnl, content: closedSignal });
-              }
-
-              await sendTelegramMessage(`
-🏁 *TRADE CLÔTURÉ* 🏁
-*Actif:* ${asset.name}
-*Résultat:* ${status === SignalStatus.WIN ? '✅ GAIN' : '❌ PERTE'}
-*Profit:* ${closedSignal.pnl.toFixed(2)}R
-*Prix de sortie:* ${currentPrice.toFixed(5)}
-              `);
-            }
-          } else {
-            // --- ANALYSE POUR NOUVEAU SIGNAL ---
-            const econCtx = await isHighImpactEventSoon(asset.symbol, 60);
-            const { signal: result, diagnostic } = analyzeMarket(asset.symbol, data.price, indicators, activeStrategy, econCtx);
-            
-            if (result) {
-              const newSignal: Signal = {
-                id: crypto.randomUUID(),
-                asset: asset.symbol,
-                assetType: asset.type,
-                type: result.type,
-                timestamp: Date.now(),
-                timeFrame: TimeFrame.M15,
-                priceAtSignal: data.price,
-                trendStrength: result.strength,
-                indicators: indicators,
-                tradeSetup: result.tradeSetup,
-                reasoning: result.reasoning,
-                status: SignalStatus.OPEN,
-                confidence: result.strength,
-                winProbability: result.winProbability,
-                scoreBreakdown: result.scoreBreakdown,
-                estimatedDuration: result.estimatedDuration,
-                isNew: true,
-                isBreakevenSet: false,
-                originalStopLoss: result.tradeSetup.stopLoss
-              };
-
-              const { isAllowed, reason } = checkCurrencyExposure(activeSignals, newSignal, MAX_CURRENCY_EXPOSURE);
-              
-              if (isAllowed) {
-                activeSignals.push(newSignal);
-                scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'SUCCESS', reason: diagnostic }, ...scanLogs].slice(0, MAX_LOGS);
-                if (supabase) {
-                  await supabase.from('signals').insert({ id: newSignal.id, asset: newSignal.asset, timeframe: '15m', content: newSignal });
-                }
-                
-                const signalEmoji = newSignal.type === SignalType.BUY ? '🟢' : '🔴';
-                const semiAuto = agentMode === 'semi-auto';
-                await sendTelegramMessage(
-                  `🚀 *NOUVEAU SIGNAL SNIPER V15* 🚀\n` +
-                  `*Actif:* ${asset.name}\n` +
-                  `*Action:* ${signalEmoji} ${newSignal.type === SignalType.BUY ? 'ACHAT' : 'VENTE'}\n` +
-                  `*Entrée:* ${data.price.toFixed(5)}\n` +
-                  `*TP:* ${newSignal.tradeSetup.takeProfit.toFixed(5)} | *SL:* ${newSignal.tradeSetup.stopLoss.toFixed(5)}\n` +
-                  `*Confiance:* ${newSignal.confidence}%`,
-                  semiAuto ? [[
-                    { text: '✅ Valider', callback_data: `execute:${newSignal.id}` },
-                    { text: '❌ Ignorer', callback_data: `ignore:${newSignal.id}` },
-                  ]] : undefined
-                );
-
-                // --- MODE AUTONOME ---
-                if (agentMode === 'autonomous') {
-                  if (newSignal.confidence >= AUTONOMOUS_MIN_CONFIDENCE) {
-                    const { allowed: riskOk, reason: riskReason } = await checkRiskLimits();
-                    if (!riskOk) {
-                      scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol,
-                        status: 'RISK_BLOCKED',
-                        reason: `🛡️ Risque bloqué — ${riskReason}`
-                      }, ...scanLogs].slice(0, MAX_LOGS);
-                    } else {
-                    const orderResult = await placeOrder(newSignal);
-                    if (orderResult.success && orderResult.tradeId) {
-                      brokerTradeIds.set(newSignal.id, orderResult.tradeId);
-                      scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol,
-                        status: 'AUTO_EXECUTED',
-                        reason: `🤖 Autonome — Confiance: ${newSignal.confidence}% ≥ ${AUTONOMOUS_MIN_CONFIDENCE}% — cTrader #${orderResult.tradeId} (${orderResult.units} units)`
-                      }, ...scanLogs].slice(0, MAX_LOGS);
-                      await sendTelegramMessage(
-                        `🤖 *EXÉCUTION AUTONOME* 🤖\n` +
-                        `*Actif:* ${asset.name}\n` +
-                        `*Action:* ${signalEmoji} ${newSignal.type === SignalType.BUY ? 'ACHAT' : 'VENTE'}\n` +
-                        `*Entrée:* ${data.price.toFixed(5)}\n` +
-                        `*TP:* ${newSignal.tradeSetup.takeProfit.toFixed(5)} | *SL:* ${newSignal.tradeSetup.stopLoss.toFixed(5)}\n` +
-                        `*Confiance:* ${newSignal.confidence}% | *cTrader:* \`${orderResult.tradeId}\``
-                      );
-                    } else {
-                      scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol,
-                        status: 'AUTO_EXEC_FAILED',
-                        reason: `🤖 Autonome échoué — ${orderResult.error}`
-                      }, ...scanLogs].slice(0, MAX_LOGS);
-                      await sendTelegramMessage(`⚠️ *Exécution autonome échouée* — ${asset.name}\nErreur: ${orderResult.error}`);
-                    }
-                    } // end riskOk
+            // --- MODE AUTONOME ---
+            if (agentMode === 'autonomous') {
+              if (decision.confidence >= AUTONOMOUS_MIN_CONFIDENCE) {
+                const { allowed: riskOk, reason: riskReason } = await checkRiskLimits();
+                if (!riskOk) {
+                  scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'RISK_BLOCKED', reason: `🛡️ Risque bloqué — ${riskReason}` }, ...scanLogs].slice(0, MAX_LOGS);
+                } else {
+                  const orderResult = await placeOrder(newSignal);
+                  if (orderResult.success && orderResult.tradeId) {
+                    brokerTradeIds.set(newSignal.id, orderResult.tradeId);
+                    scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'AUTO_EXECUTED', reason: `🤖 Autonome IA — Confiance: ${decision.confidence}% — cTrader #${orderResult.tradeId}` }, ...scanLogs].slice(0, MAX_LOGS);
+                    await sendTelegramMessage(`🤖 *EXÉCUTION AUTONOME IA* 🤖\n*Actif:* ${asset.name}\n*Confiance:* ${decision.confidence}% | *cTrader:* \`${orderResult.tradeId}\``);
                   } else {
-                    scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol,
-                      status: 'AUTO_SKIPPED',
-                      reason: `🤖 Seuil non atteint — Confiance ${newSignal.confidence}% < ${AUTONOMOUS_MIN_CONFIDENCE}%`
-                    }, ...scanLogs].slice(0, MAX_LOGS);
+                    scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'AUTO_EXEC_FAILED', reason: `🤖 Autonome échoué — ${orderResult.error}` }, ...scanLogs].slice(0, MAX_LOGS);
+                    await sendTelegramMessage(`⚠️ *Exécution autonome échouée* — ${asset.name}\nErreur: ${orderResult.error}`);
                   }
                 }
               } else {
-                scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'REJECTED', reason: reason }, ...scanLogs].slice(0, MAX_LOGS);
+                scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'AUTO_SKIPPED', reason: `🤖 Seuil non atteint — Confiance ${decision.confidence}% < ${AUTONOMOUS_MIN_CONFIDENCE}%` }, ...scanLogs].slice(0, MAX_LOGS);
               }
-            } else if (Math.random() > 0.7) {
-              scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'REJECTED', reason: diagnostic }, ...scanLogs].slice(0, MAX_LOGS);
             }
+          } else {
+            scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'REJECTED', reason: reason }, ...scanLogs].slice(0, MAX_LOGS);
           }
+
+        } catch (agentError: any) {
+          console.error(`Pipeline error for ${candidate.asset.symbol}:`, agentError.message);
+          scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: candidate.asset.symbol, status: 'ERROR', reason: `Pipeline IA: ${agentError.message}` }, ...scanLogs].slice(0, MAX_LOGS);
         }
-        await new Promise(r => setTimeout(r, 1000)); // Rate limiting
-      } catch (error: any) {
-        console.error(`Error monitoring ${asset.symbol}:`, error.message);
-        scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'ERROR', reason: error.message }, ...scanLogs].slice(0, MAX_LOGS);
       }
+    } catch (pipelineError: any) {
+      console.error(`Pipeline global error:`, pipelineError.message);
     }
 
     lastScanTime = Date.now();
