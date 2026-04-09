@@ -905,6 +905,21 @@ async function startServer() {
     }
   });
 
+  // Diagnostic Gemini
+  apiRouter.get("/diag/gemini", async (req, res) => {
+    const hasKey = !!process.env.API_KEY;
+    const keyLen = (process.env.API_KEY || '').length;
+    if (!hasKey) return res.json({ ok: false, error: 'API_KEY not set', keyLen });
+    try {
+      const { GoogleGenAI } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
+      const r = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: 'Réponds juste "OK"' });
+      res.json({ ok: true, response: r.text?.substring(0, 100), keyLen });
+    } catch (e: any) {
+      res.json({ ok: false, error: e.message, keyLen });
+    }
+  });
+
   // Appliquer le router API
   app.use("/api", apiRouter);
 
@@ -925,6 +940,17 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     runBackgroundMonitor().catch(console.error);
+
+    // Self-ping keepalive pour Render Free tier (toutes les 13 min)
+    const RENDER_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    setInterval(async () => {
+      try {
+        const res = await fetch(`${RENDER_URL}/api/engine/status`);
+        console.log(`🏓 Keepalive ping: ${res.status}`);
+      } catch (e: any) {
+        console.warn(`🏓 Keepalive failed: ${e.message}`);
+      }
+    }, 13 * 60 * 1000);
 
     // Rapport quotidien à 22h00 heure locale
     (async function scheduleDailyReport() {

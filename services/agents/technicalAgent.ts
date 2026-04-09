@@ -94,7 +94,8 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
       entryType: parsed.entryType || 'Momentum',
     };
   } catch (err: any) {
-    console.error(`❌ TechnicalAgent error for ${asset.symbol}:`, err.message);
+    console.error(`❌ TechnicalAgent error for ${asset.symbol}:`, err.message, err.stack?.split('\n').slice(0, 3).join(' | '));
+    console.error(`   API_KEY present: ${!!process.env.API_KEY}, length: ${(process.env.API_KEY || '').length}`);
     return fallbackAnalysis(candidate);
   }
 }
