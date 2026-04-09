@@ -817,6 +817,18 @@ async function startServer() {
     }
   });
 
+  apiRouter.delete("/signals/all/purge", requireAuth, async (req, res) => {
+    const count = activeSignals.length;
+    if (supabase) {
+      for (const s of activeSignals) {
+        await supabase.from('signals').delete().eq('id', s.id);
+      }
+    }
+    activeSignals = [];
+    console.log(`🗑️ Purge: ${count} signaux supprimés`);
+    res.json({ success: true, purged: count });
+  });
+
   apiRouter.post("/signals/:id/analyze", async (req, res) => {
     const signal = activeSignals.find(s => s.id === req.params.id);
     if (!signal) return res.status(404).json({ error: "Signal non trouvé" });
