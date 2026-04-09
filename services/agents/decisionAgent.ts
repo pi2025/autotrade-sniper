@@ -108,18 +108,29 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
   "reasoning": "<verdict final en 2-3 phrases>"
 }`;
 
+  if (!process.env.GROQ_API_KEY) {
+    console.warn(`⚠️ DecisionAgent: GROQ_API_KEY manquante, fallback`);
+    return fallbackDecision(input);
+  }
+
   try {
     const groq = getGroq();
+    console.log(`👨‍💼 DecisionAgent: appel Groq pour ${candidate.asset.symbol}...`);
     const response = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        { role: 'system', content: 'Tu es un trader senior expert. Réponds UNIQUEMENT en JSON valide, sans markdown ni commentaires.' },
+        { role: 'user', content: prompt }
+      ],
       temperature: 0.3,
+      max_tokens: 500,
     });
 
     const text = response.choices[0]?.message?.content?.trim() || '';
+    console.log(`👨‍💼 DecisionAgent ${candidate.asset.symbol}: réponse Groq (${text.length} chars): ${text.substring(0, 150)}`);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      console.warn(`⚠️ DecisionAgent: réponse non-JSON pour ${candidate.asset.symbol}:`, text.substring(0, 200));
+      console.warn(`⚠️ DecisionAgent: réponse non-JSON pour ${candidate.asset.symbol}:`, text.substring(0, 300));
       return fallbackDecision(input);
     }
 
@@ -143,6 +154,7 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
     const confidence = Math.max(0, Math.min(100, parsed.confidence || 0));
     const action = parsed.action === 'EXECUTE' && confidence >= 60 ? 'EXECUTE' : 'SKIP';
 
+    console.log(`✅ DecisionAgent ${candidate.asset.symbol}: Groq OK → ${action} conf=${confidence}`);
     return {
       action,
       direction: dir,
@@ -150,11 +162,11 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
       slPrice: sl,
       tpPrice: tp,
       riskPercent: Math.max(0.25, Math.min(1.0, parsed.riskPercent || 0.5)) * risk.positionSizeMultiplier,
-      reasoning: [parsed.reasoning || 'Décision IA'],
-      aiVerdict: parsed.reasoning || 'Analyse complète du comité',
+      reasoning: [`[Groq IA] ${parsed.reasoning || 'Décision IA'}`],
+      aiVerdict: `[Groq IA] ${parsed.reasoning || 'Analyse complète du comité'}`,
     };
   } catch (err: any) {
-    console.error(`❌ DecisionAgent error for ${candidate.asset.symbol}:`, err.message);
+    console.error(`❌ DecisionAgent error for ${candidate.asset.symbol}:`, err.message, err.status || '', err.error?.message || '');
     return fallbackDecision(input);
   }
 }

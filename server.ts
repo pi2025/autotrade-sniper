@@ -936,7 +936,39 @@ async function startServer() {
     }
   });
 
-  // Diagnostic Groq IA
+  // Diagnostic Groq IA — test complet avec un vrai prompt technique
+  apiRouter.get("/diag/groq-test", async (req, res) => {
+    if (!process.env.GROQ_API_KEY) return res.json({ ok: false, error: 'GROQ_API_KEY not set' });
+    try {
+      const Groq = (await import('groq-sdk')).default;
+      const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+      const start = Date.now();
+      const r = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: 'Réponds UNIQUEMENT en JSON valide.' },
+          { role: 'user', content: 'Analyse technique EURUSD: ADX 30, RSI 55, prix au-dessus EMA20. Réponds en JSON: {"score": <0-100>, "direction": "<BUY|SELL|NEUTRAL>", "reasoning": "<1 phrase>"}' }
+        ],
+        temperature: 0.3,
+        max_tokens: 200,
+      });
+      const text = r.choices[0]?.message?.content || '';
+      const elapsed = Date.now() - start;
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      res.json({
+        ok: true,
+        elapsed_ms: elapsed,
+        raw: text.substring(0, 300),
+        parsed: jsonMatch ? JSON.parse(jsonMatch[0]) : null,
+        model: r.model,
+        usage: r.usage,
+      });
+    } catch (e: any) {
+      res.json({ ok: false, error: e.message, status: e.status, errorBody: e.error });
+    }
+  });
+
+  // Diagnostic Groq IA simple
   apiRouter.get("/diag/ai", async (req, res) => {
     const hasKey = !!process.env.GROQ_API_KEY;
     const keyLen = (process.env.GROQ_API_KEY || '').length;

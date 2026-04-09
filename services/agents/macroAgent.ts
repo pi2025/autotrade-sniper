@@ -50,30 +50,41 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
 }`;
 
   try {
+    if (!process.env.GROQ_API_KEY) {
+      console.warn(`⚠️ MacroAgent: GROQ_API_KEY manquante, fallback`);
+      return fallbackMacro(candidate);
+    }
     const groq = getGroq();
+    console.log(`🌍 MacroAgent: appel Groq pour ${asset.symbol}...`);
     const response = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        { role: 'system', content: 'Tu es un analyste macroéconomique expert. Réponds UNIQUEMENT en JSON valide, sans markdown ni commentaires.' },
+        { role: 'user', content: prompt }
+      ],
       temperature: 0.3,
+      max_tokens: 500,
     });
 
     const text = response.choices[0]?.message?.content?.trim() || '';
+    console.log(`🌍 MacroAgent ${asset.symbol}: réponse Groq (${text.length} chars): ${text.substring(0, 150)}`);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      console.warn(`⚠️ MacroAgent: réponse non-JSON pour ${asset.symbol}:`, text.substring(0, 200));
+      console.warn(`⚠️ MacroAgent: réponse non-JSON pour ${asset.symbol}:`, text.substring(0, 300));
       return fallbackMacro(candidate);
     }
 
     const parsed = JSON.parse(jsonMatch[0]);
+    console.log(`✅ MacroAgent ${asset.symbol}: Groq OK → bias=${parsed.bias} alert=${parsed.alertLevel}`);
     return {
       score: Math.max(0, Math.min(100, parsed.score || 50)),
       bias: parsed.bias === 'BULLISH' ? 'BULLISH' : parsed.bias === 'BEARISH' ? 'BEARISH' : 'NEUTRAL',
       alertLevel: parsed.alertLevel === 'RED' ? 'RED' : parsed.alertLevel === 'YELLOW' ? 'YELLOW' : 'GREEN',
       events: Array.isArray(parsed.events) ? parsed.events.slice(0, 5) : [],
-      reasoning: parsed.reasoning || 'Analyse macro IA',
+      reasoning: `[Groq IA] ${parsed.reasoning || 'Analyse macro IA'}`,
     };
   } catch (err: any) {
-    console.error(`❌ MacroAgent error for ${asset.symbol}:`, err.message);
+    console.error(`❌ MacroAgent error for ${asset.symbol}:`, err.message, err.status || '', err.error?.message || '');
     return fallbackMacro(candidate);
   }
 }

@@ -64,19 +64,27 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
 }`;
 
   try {
+    if (!process.env.GROQ_API_KEY) {
+      console.warn(`⚠️ TechnicalAgent: GROQ_API_KEY manquante, fallback`);
+      return fallbackAnalysis(candidate);
+    }
     const groq = getGroq();
     console.log(`🧠 TechnicalAgent: appel Groq pour ${asset.symbol}...`);
     const response = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        { role: 'system', content: 'Tu es un analyste technique expert. Réponds UNIQUEMENT en JSON valide, sans markdown ni commentaires.' },
+        { role: 'user', content: prompt }
+      ],
       temperature: 0.3,
+      max_tokens: 500,
     });
 
     const text = response.choices[0]?.message?.content?.trim() || '';
-    console.log(`🧠 TechnicalAgent ${asset.symbol}: réponse reçue (${text.length} chars)`);
+    console.log(`🧠 TechnicalAgent ${asset.symbol}: réponse Groq (${text.length} chars): ${text.substring(0, 150)}`);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      console.warn(`⚠️ TechnicalAgent: réponse non-JSON pour ${asset.symbol}:`, text.substring(0, 200));
+      console.warn(`⚠️ TechnicalAgent: réponse non-JSON pour ${asset.symbol}:`, text.substring(0, 300));
       return fallbackAnalysis(candidate);
     }
 
@@ -85,16 +93,17 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
     const slMult = Math.max(1.5, Math.min(3.0, parsed.slDistance_atr || 2.0));
     const tpMult = Math.max(2.0, Math.min(5.0, parsed.tpDistance_atr || 3.0));
 
+    console.log(`✅ TechnicalAgent ${asset.symbol}: Groq OK → ${direction} score=${parsed.score}`);
     return {
       score: Math.max(0, Math.min(100, parsed.score || 50)),
       direction,
       slPrice: direction === 'BUY' ? price - h1.atr * slMult : price + h1.atr * slMult,
       tpPrice: direction === 'BUY' ? price + h1.atr * tpMult : price - h1.atr * tpMult,
-      reasoning: parsed.reasoning || 'Analyse technique IA',
+      reasoning: `[Groq IA] ${parsed.reasoning || 'Analyse technique IA'}`,
       entryType: parsed.entryType || 'Momentum',
     };
   } catch (err: any) {
-    console.error(`❌ TechnicalAgent error for ${asset.symbol}:`, err.message);
+    console.error(`❌ TechnicalAgent error for ${asset.symbol}:`, err.message, err.status || '', err.error?.message || '');
     return fallbackAnalysis(candidate);
   }
 }
