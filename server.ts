@@ -905,16 +905,19 @@ async function startServer() {
     }
   });
 
-  // Diagnostic Gemini
-  apiRouter.get("/diag/gemini", async (req, res) => {
-    const hasKey = !!process.env.API_KEY;
-    const keyLen = (process.env.API_KEY || '').length;
-    if (!hasKey) return res.json({ ok: false, error: 'API_KEY not set', keyLen });
+  // Diagnostic Groq IA
+  apiRouter.get("/diag/ai", async (req, res) => {
+    const hasKey = !!process.env.GROQ_API_KEY;
+    const keyLen = (process.env.GROQ_API_KEY || '').length;
+    if (!hasKey) return res.json({ ok: false, error: 'GROQ_API_KEY not set', keyLen });
     try {
-      const { GoogleGenAI } = await import('@google/genai');
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
-      const r = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: 'Réponds juste "OK"' });
-      res.json({ ok: true, response: r.text?.substring(0, 100), keyLen });
+      const Groq = (await import('groq-sdk')).default;
+      const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+      const r = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: 'Réponds juste "OK"' }],
+      });
+      res.json({ ok: true, response: r.choices[0]?.message?.content?.substring(0, 100), keyLen, model: 'llama-3.3-70b-versatile' });
     } catch (e: any) {
       res.json({ ok: false, error: e.message, keyLen });
     }

@@ -1,16 +1,14 @@
 /**
  * Agent 2 : Analyste Technique IA
- * Analyse approfondie d'un candidat via Gemini Flash.
+ * Analyse approfondie d'un candidat via Groq (Llama 3.3 70B).
  * Input : indicateurs H1 + M15 + bougies récentes
  * Output : score technique + direction + SL/TP + reasoning
- * Coût : ~$0.001/appel (Gemini Flash gratuit)
  */
 
-import { GoogleGenAI } from '@google/genai';
+import Groq from 'groq-sdk';
 import { ScreenerCandidate } from './screenerAgent.ts';
-import { SignalType } from '../../types.ts';
 
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getGroq = () => new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export interface TechnicalAnalysis {
   score: number;           // 0-100
@@ -22,7 +20,6 @@ export interface TechnicalAnalysis {
 }
 
 export async function runTechnicalAnalysis(candidate: ScreenerCandidate): Promise<TechnicalAnalysis> {
-  const ai = getAI();
   const { h1Indicators: h1, m15Indicators: m15, price, asset } = candidate;
 
   // Dernières 20 bougies H1 pour le contexte
@@ -67,13 +64,14 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
 }`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
+    const groq = getGroq();
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
     });
 
-    const text = response.text?.trim() || '';
-    // Extraire le JSON (peut être enveloppé dans des backticks)
+    const text = response.choices[0]?.message?.content?.trim() || '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.warn(`⚠️ TechnicalAgent: réponse non-JSON pour ${asset.symbol}:`, text.substring(0, 200));
@@ -94,13 +92,12 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
       entryType: parsed.entryType || 'Momentum',
     };
   } catch (err: any) {
-    console.error(`❌ TechnicalAgent error for ${asset.symbol}:`, err.message, err.stack?.split('\n').slice(0, 3).join(' | '));
-    console.error(`   API_KEY present: ${!!process.env.API_KEY}, length: ${(process.env.API_KEY || '').length}`);
+    console.error(`❌ TechnicalAgent error for ${asset.symbol}:`, err.message);
     return fallbackAnalysis(candidate);
   }
 }
 
-/** Fallback si Gemini échoue — analyse technique pure basée sur les indicateurs */
+/** Fallback si Groq échoue — analyse technique pure basée sur les indicateurs */
 function fallbackAnalysis(candidate: ScreenerCandidate): TechnicalAnalysis {
   const { h1Indicators: h1, price } = candidate;
   const isBull = price > h1.ema20 && h1.ema20 > h1.ema50 && h1.ema50 > h1.ema200;

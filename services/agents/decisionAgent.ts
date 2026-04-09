@@ -3,16 +3,15 @@
  * Prend la décision finale en synthétisant tous les agents précédents.
  * Input : résultats des 4 agents + contexte marché
  * Output : GO/NO-GO + signal final avec SL/TP/taille
- * Coût : ~$0.001/appel (Gemini Flash gratuit)
  */
 
-import { GoogleGenAI } from '@google/genai';
+import Groq from 'groq-sdk';
 import { ScreenerCandidate } from './screenerAgent.ts';
 import { TechnicalAnalysis } from './technicalAgent.ts';
 import { MacroAnalysis } from './macroAgent.ts';
 import { RiskDecision } from './riskAgent.ts';
 
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getGroq = () => new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export interface FinalDecision {
   action: 'EXECUTE' | 'SKIP';
@@ -35,7 +34,7 @@ export interface PipelineInput {
 export async function runDecisionAgent(input: PipelineInput): Promise<FinalDecision> {
   const { candidate, technical, macro, risk } = input;
 
-  // Si le risk manager a rejeté, pas besoin d'appeler Gemini
+  // Si le risk manager a rejeté, pas besoin d'appeler l'IA
   if (risk.status === 'REJECTED') {
     return {
       action: 'SKIP',
@@ -62,8 +61,6 @@ export async function runDecisionAgent(input: PipelineInput): Promise<FinalDecis
       aiVerdict: 'Pas de direction technique claire',
     };
   }
-
-  const ai = getAI();
 
   const prompt = `Tu es un trader senior avec 20 ans d'expérience. Tu diriges un comité de validation.
 Voici les analyses de ton équipe pour ${candidate.asset.name} (${candidate.asset.symbol}) à ${candidate.price} :
@@ -112,12 +109,14 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
 }`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
+    const groq = getGroq();
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
     });
 
-    const text = response.text?.trim() || '';
+    const text = response.choices[0]?.message?.content?.trim() || '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.warn(`⚠️ DecisionAgent: réponse non-JSON pour ${candidate.asset.symbol}:`, text.substring(0, 200));
@@ -160,7 +159,7 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
   }
 }
 
-/** Fallback si Gemini échoue — décision basée sur les scores */
+/** Fallback si Groq échoue — décision basée sur les scores */
 function fallbackDecision(input: PipelineInput): FinalDecision {
   const { candidate, technical, macro, risk } = input;
   const avgScore = (technical.score + macro.score + candidate.screenScore) / 3;

@@ -1,16 +1,15 @@
 /**
  * Agent 3 : Analyste Macro/Fondamental IA
- * Évalue le contexte macroéconomique via Gemini Flash + Google Search.
+ * Évalue le contexte macroéconomique via Groq (Llama 3.3 70B).
  * Input : actif + direction technique proposée
  * Output : score macro + biais + alertes événements
- * Coût : ~$0.001/appel (Gemini Flash gratuit)
  */
 
-import { GoogleGenAI } from '@google/genai';
+import Groq from 'groq-sdk';
 import { TechnicalAnalysis } from './technicalAgent.ts';
 import { ScreenerCandidate } from './screenerAgent.ts';
 
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getGroq = () => new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export interface MacroAnalysis {
   score: number;            // 0-100
@@ -24,7 +23,6 @@ export async function runMacroAnalysis(
   candidate: ScreenerCandidate,
   technical: TechnicalAnalysis
 ): Promise<MacroAnalysis> {
-  const ai = getAI();
   const { asset, price } = candidate;
 
   const prompt = `Tu es un analyste macroéconomique expert. Évalue le contexte fondamental pour ce trade.
@@ -52,15 +50,14 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
 }`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-      },
+    const groq = getGroq();
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
     });
 
-    const text = response.text?.trim() || '';
+    const text = response.choices[0]?.message?.content?.trim() || '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.warn(`⚠️ MacroAgent: réponse non-JSON pour ${asset.symbol}:`, text.substring(0, 200));
@@ -76,13 +73,12 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
       reasoning: parsed.reasoning || 'Analyse macro IA',
     };
   } catch (err: any) {
-    console.error(`❌ MacroAgent error for ${asset.symbol}:`, err.message, err.stack?.split('\n').slice(0, 3).join(' | '));
-    console.error(`   API_KEY present: ${!!process.env.API_KEY}, length: ${(process.env.API_KEY || '').length}`);
+    console.error(`❌ MacroAgent error for ${asset.symbol}:`, err.message);
     return fallbackMacro(candidate);
   }
 }
 
-/** Fallback si Gemini échoue — score neutre conservateur */
+/** Fallback si Groq échoue — score neutre conservateur */
 function fallbackMacro(candidate: ScreenerCandidate): MacroAnalysis {
   return {
     score: 50,
