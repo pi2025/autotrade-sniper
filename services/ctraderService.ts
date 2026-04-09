@@ -243,20 +243,64 @@ function calculateVolume(signal: Signal, balance: number): number {
   const ctraderName = SYMBOL_MAP[signal.asset] ?? '';
   const isUsdBase = ['USDJPY', 'USDCAD', 'USDCHF'].includes(ctraderName);
 
+  // Valeur d'un pip/point par unité selon le type d'actif
+  // cTrader volume = unités de base currency (100000 = 1 lot forex)
+  // Pour les matières premières et indices, 1 unité = valeur du contrat
+  const isCommodity = ['XAUUSD', 'XAGUSD', 'XTIUSD'].includes(ctraderName);
+  const isIndex = ['US500', 'USTEC', 'FRA40'].includes(ctraderName);
+  const isCrypto = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'BNBUSD', 'XRPUSD'].includes(ctraderName);
+
   let rawVolume: number;
-  if (isUsdBase) {
+
+  if (isCommodity) {
+    // Commodités : volume en unités (ex: 100 unités XAGUSD = 100 oz d'argent)
+    // PnL = volume * slDistance, donc volume = riskAmount / slDistance
+    rawVolume = riskAmount / slDistance;
+    // cTrader commodités : volume en centièmes d'unité (100 = 1 unité)
+    rawVolume = rawVolume * 100;
+  } else if (isIndex) {
+    // Indices : volume = riskAmount / slDistance (en points)
+    // cTrader indices : volume en centièmes (100 = 1 contrat)
+    rawVolume = (riskAmount / slDistance) * 100;
+  } else if (isCrypto) {
+    // Crypto : volume en satoshis/wei — 1 unité = 100000000 (BTC) ou 100000000 (ETH)
+    // cTrader crypto volume = unités × 100000000
+    // PnL = volume_lots * slDistance, volume_lots = riskAmount / slDistance
+    rawVolume = riskAmount / slDistance;
+    rawVolume = rawVolume * 100000000; // En unités cTrader crypto
+  } else if (isUsdBase) {
     rawVolume = (riskAmount * signal.priceAtSignal) / slDistance;
   } else {
     rawVolume = riskAmount / slDistance;
   }
 
-  // Arrondi au pas de 1000 (0.01 lot)
-  const STEP = 1000;
-  const volume = Math.floor(rawVolume / STEP) * STEP;
+  // Pas d'arrondi et minimum selon le type d'actif
+  let step: number;
+  let minVolume: number;
+  let maxVolume: number;
 
-  // Plafond : 1 lot standard
-  const MAX_VOLUME = 100_000;
-  return Math.min(volume, MAX_VOLUME);
+  if (isCommodity || isIndex) {
+    step = 100;        // 0.01 contrat minimum
+    minVolume = 100;   // 0.01 contrat
+    maxVolume = 10000; // 100 contrats max
+  } else if (isCrypto) {
+    step = 1000000;           // 0.01 unité
+    minVolume = 1000000;      // 0.01 unité minimum
+    maxVolume = 100000000000; // 1000 unités max
+  } else {
+    step = 1000;       // 0.01 lot forex
+    minVolume = 1000;  // 0.01 lot minimum
+    maxVolume = 100000; // 1 lot standard max
+  }
+
+  let volume = Math.floor(rawVolume / step) * step;
+
+  // Garantir le volume minimum si rawVolume > 0
+  if (volume < minVolume && rawVolume > 0) {
+    volume = minVolume;
+  }
+
+  return Math.min(volume, maxVolume);
 }
 
 /**
