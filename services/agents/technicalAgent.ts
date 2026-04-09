@@ -65,6 +65,7 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
 
   try {
     const groq = getGroq();
+    console.log(`🧠 TechnicalAgent: appel Groq pour ${asset.symbol}...`);
     const response = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
@@ -72,6 +73,7 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
     });
 
     const text = response.choices[0]?.message?.content?.trim() || '';
+    console.log(`🧠 TechnicalAgent ${asset.symbol}: réponse reçue (${text.length} chars)`);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.warn(`⚠️ TechnicalAgent: réponse non-JSON pour ${asset.symbol}:`, text.substring(0, 200));

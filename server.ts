@@ -342,24 +342,27 @@ async function runBackgroundMonitor() {
     const startTime = Date.now();
     console.log(`[${new Date().toLocaleTimeString()}] Scan en cours...`);
 
-    // === ÉTAPE 1 : SUIVI DES TRADES EXISTANTS (sur données M15 rapides) ===
+    // === ÉTAPE 1 : SUIVI DES TRADES EXISTANTS (sur données H1 pour trailing stable) ===
     for (const existing of [...activeSignals]) {
       try {
-        const data = await fetchYahooInternal(existing.asset);
+        // Utiliser H1 pour le trailing stop (plus stable que M15)
+        const h1Data = await fetchYahooInternal(existing.asset, '1h', '60d');
+        const m15Data = await fetchYahooInternal(existing.asset);
         const asset = INITIAL_ASSETS.find(a => a.symbol === existing.asset);
-        if (!data || !asset) continue;
+        if (!m15Data || !asset) continue;
 
-        const indicators = calculateIndicators(data.history, data.highs, data.lows, data.opens, data.volumes, activeStrategy, existing.asset);
-        if (indicators) {
-          marketData[existing.asset] = { ...data, lastIndicators: indicators };
+        const h1Indicators = calculateIndicators(h1Data.history, h1Data.highs, h1Data.lows, h1Data.opens, h1Data.volumes, activeStrategy, existing.asset);
+        const m15Indicators = calculateIndicators(m15Data.history, m15Data.highs, m15Data.lows, m15Data.opens, m15Data.volumes, activeStrategy, existing.asset);
+        if (m15Indicators) {
+          marketData[existing.asset] = { ...m15Data, lastIndicators: m15Indicators };
         }
 
-        const currentPrice = data.price;
+        const currentPrice = m15Data.price;
         const isBuy = existing.type === SignalType.BUY;
 
-        // Trailing stop via Chandelier Exit
-        if (indicators) {
-          const chandelier = indicators.chandelierExit;
+        // Trailing stop via Chandelier Exit H1 (pas M15 — trop serré)
+        if (h1Indicators) {
+          const chandelier = h1Indicators.chandelierExit;
           const currentSL = existing.tradeSetup.stopLoss;
           if (isBuy && chandelier > currentSL) {
             existing.tradeSetup.stopLoss = chandelier;
@@ -441,6 +444,13 @@ async function runBackgroundMonitor() {
       const topCandidates = candidates.slice(0, 10);
 
       for (const candidate of topCandidates) {
+        // Vérifier la limite de trades AVANT de lancer les agents IA
+        if (activeSignals.length >= riskLimits.maxConcurrentTrades) {
+          console.log(`⚠️ Max trades atteint (${activeSignals.length}/${riskLimits.maxConcurrentTrades}) — arrêt du pipeline`);
+          scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: candidate.asset.symbol, status: 'RISK_BLOCKED', reason: `Limite trades simultanés atteinte (${activeSignals.length}/${riskLimits.maxConcurrentTrades})` }, ...scanLogs].slice(0, MAX_LOGS);
+          break;
+        }
+
         try {
           // Agent 2 — Analyste Technique IA
           const technical = await runTechnicalAnalysis(candidate);
