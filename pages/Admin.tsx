@@ -206,35 +206,80 @@ const BrokerStatus: React.FC = () => {
         {loading && !status ? (
           <p className="text-slate-500 text-xs italic">Vérification en cours...</p>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className={`p-5 rounded-2xl border flex items-center gap-4 ${isConnected ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-rose-500/5 border-rose-500/20'}`}>
-              {isConnected ? <Wifi className="w-6 h-6 text-emerald-400 shrink-0" /> : <WifiOff className="w-6 h-6 text-rose-400 shrink-0" />}
-              <div>
-                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Connexion</p>
-                <p className={`text-sm font-black ${isConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {isConnected ? 'CONNECTÉ' : 'DÉCONNECTÉ'}
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className={`p-5 rounded-2xl border flex items-center gap-4 ${isConnected ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-rose-500/5 border-rose-500/20'}`}>
+                {isConnected ? <Wifi className="w-6 h-6 text-emerald-400 shrink-0" /> : <WifiOff className="w-6 h-6 text-rose-400 shrink-0" />}
+                <div>
+                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Connexion</p>
+                  <p className={`text-sm font-black ${isConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {isConnected ? 'CONNECTÉ' : 'DÉCONNECTÉ'}
+                  </p>
+                </div>
+              </div>
+              <div className="p-5 rounded-2xl border border-slate-800 bg-slate-950">
+                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Solde Actuel</p>
+                <p className="text-xl font-black text-white">
+                  {status?.balance !== undefined ? `$${Number(status.balance).toLocaleString('fr-FR', { minimumFractionDigits: 2 })}` : '—'}
                 </p>
               </div>
+              <div className="p-5 rounded-2xl border border-slate-800 bg-slate-950">
+                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Capital Initial</p>
+                <p className="text-lg font-black text-slate-400">
+                  {status?.initialCapital ? `$${Number(status.initialCapital).toLocaleString('fr-FR', { minimumFractionDigits: 2 })}` : '—'}
+                </p>
+              </div>
+              <div className="p-5 rounded-2xl border border-slate-800 bg-slate-950">
+                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">P&L / Drawdown</p>
+                {status?.balance !== undefined && status?.initialCapital > 0 ? (() => {
+                  const pnl = status.balance - status.initialCapital;
+                  const pnlPct = (pnl / status.initialCapital * 100);
+                  const isPositive = pnl >= 0;
+                  return (
+                    <div>
+                      <p className={`text-lg font-black ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {isPositive ? '+' : ''}{pnl.toFixed(2)} $
+                      </p>
+                      <p className={`text-[10px] font-bold ${isPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
+                        {isPositive ? '+' : ''}{pnlPct.toFixed(2)}%
+                      </p>
+                    </div>
+                  );
+                })() : <p className="text-lg font-black text-slate-500">—</p>}
+              </div>
             </div>
-            <div className="p-5 rounded-2xl border border-slate-800 bg-slate-950">
-              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Balance</p>
-              <p className="text-xl font-black text-white">
-                {status?.balance !== undefined ? `$${Number(status.balance).toLocaleString('fr-FR', { minimumFractionDigits: 2 })}` : '—'}
-              </p>
-            </div>
-            <div className="p-5 rounded-2xl border border-slate-800 bg-slate-950">
-              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Compte</p>
-              <p className="text-sm font-black text-white font-mono">
-                {status?.accountId || '—'}
-              </p>
-              <p className="text-[9px] text-slate-500 mt-1">IC Markets Demo</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-5 rounded-2xl border border-slate-800 bg-slate-950">
+                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Compte</p>
+                <p className="text-sm font-black text-white font-mono">
+                  {status?.accountId || '—'}
+                </p>
+                <p className="text-[9px] text-slate-500 mt-1">IC Markets {status?.mode || 'Demo'}</p>
+              </div>
+              <div className="p-5 rounded-2xl border border-slate-800 bg-slate-950">
+                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Trades Ouverts (cTrader)</p>
+                <p className="text-lg font-black text-white">
+                  {status?.openTradesCount ?? '—'}
+                </p>
+                {status?.openTrades?.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {status.openTrades.map((t: any) => (
+                      <div key={t.tradeId} className="flex justify-between text-[9px] font-mono">
+                        <span className={`font-bold ${t.direction === 'BUY' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {t.symbol} {t.direction}
+                        </span>
+                        <span className={`font-bold ${(t.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {t.pnl !== undefined ? `${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}$` : '—'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             {!isConnected && status?.error && (
-              <div className="md:col-span-3 p-4 bg-rose-500/5 border border-rose-500/20 rounded-2xl">
+              <div className="p-4 bg-rose-500/5 border border-rose-500/20 rounded-2xl">
                 <p className="text-xs text-rose-400 font-mono">{status.error}</p>
-                <p className="text-[9px] text-slate-500 mt-2">
-                  💡 Vérifie que CTRADER_ACCESS_TOKEN est configuré dans ton .env (en attente d'approbation Spotware)
-                </p>
               </div>
             )}
           </div>
@@ -322,7 +367,7 @@ const Admin: React.FC = () => {
           {[
             { key: 'supabase', label: 'Supabase Connection' },
             { key: 'telegram', label: 'Telegram Alerts' },
-            { key: 'gemini', label: 'Gemini AI' },
+            { key: 'gemini', label: 'Groq AI (Llama 3.3)' },
             { key: 'ctrader', label: 'cTrader Broker' },
           ].map(({ key, label }) => (
             <div key={key} className="p-4 bg-slate-950 rounded-2xl border border-slate-800">

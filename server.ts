@@ -691,7 +691,7 @@ async function startServer() {
       services: {
         supabase: !!process.env.VITE_SUPABASE_URL,
         telegram: !!process.env.TELEGRAM_BOT_TOKEN,
-        gemini: !!process.env.API_KEY,
+        gemini: !!process.env.GROQ_API_KEY,
         ctrader: !!process.env.CTRADER_ACCESS_TOKEN,
       },
     });
@@ -713,7 +713,16 @@ async function startServer() {
   });
   apiRouter.get("/broker/status", async (req, res) => {
     const status = await testConnection();
-    res.json(status);
+    const openTrades = await getOpenTrades();
+    res.json({
+      ...status,
+      initialCapital: riskLimits.initialCapital,
+      openTrades: openTrades.map(t => ({ tradeId: t.tradeId, symbol: t.symbol, direction: t.direction, units: t.units, pnl: t.pnl })),
+      openTradesCount: openTrades.length,
+      drawdownPercent: status.balance && riskLimits.initialCapital > 0
+        ? ((riskLimits.initialCapital - status.balance) / riskLimits.initialCapital * 100).toFixed(2)
+        : null,
+    });
   });
   apiRouter.get("/engine/status", (req, res) => {
     console.log("GET /api/engine/status");
