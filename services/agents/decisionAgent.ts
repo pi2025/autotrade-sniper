@@ -11,7 +11,7 @@ import { TechnicalAnalysis } from './technicalAgent.ts';
 import { MacroAnalysis } from './macroAgent.ts';
 import { RiskDecision } from './riskAgent.ts';
 
-const getGroq = () => new Groq({ apiKey: process.env.GROQ_API_KEY });
+const getGroq = () => new Groq({ apiKey: process.env.GROQ_API_KEY, timeout: 10000 });
 
 export interface FinalDecision {
   action: 'EXECUTE' | 'SKIP';
@@ -124,6 +124,7 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
       ],
       temperature: 0.3,
       max_tokens: 500,
+      response_format: { type: 'json_object' },
     });
 
     const text = response.choices[0]?.message?.content?.trim() || '';

@@ -9,7 +9,7 @@ import Groq from 'groq-sdk';
 import { TechnicalAnalysis } from './technicalAgent.ts';
 import { ScreenerCandidate } from './screenerAgent.ts';
 
-const getGroq = () => new Groq({ apiKey: process.env.GROQ_API_KEY });
+const getGroq = () => new Groq({ apiKey: process.env.GROQ_API_KEY, timeout: 10000 });
 
 export interface MacroAnalysis {
   score: number;            // 0-100
@@ -64,6 +64,7 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
       ],
       temperature: 0.3,
       max_tokens: 500,
+      response_format: { type: 'json_object' },
     });
 
     const text = response.choices[0]?.message?.content?.trim() || '';

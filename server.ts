@@ -72,7 +72,7 @@ let riskLimits = {
 const brokerTradeIds = new Map<string, string>();
 const MAX_CURRENCY_EXPOSURE = 2;
 const MAX_LOGS = 50;
-const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+const COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4 heures — évite le re-entry rapide après clôture
 // Seuil de confiance minimum pour l'exécution autonome (configurable via env)
 const AUTONOMOUS_MIN_CONFIDENCE = parseInt(process.env.AUTONOMOUS_MIN_CONFIDENCE || '75', 10);
 
@@ -360,8 +360,8 @@ async function runBackgroundMonitor() {
         const currentPrice = m15Data.price;
         const isBuy = existing.type === SignalType.BUY;
 
-        // Trailing stop via Chandelier Exit H1 (pas M15 — trop serré)
-        if (h1Indicators) {
+        // Trailing stop via Chandelier Exit H1 — uniquement après breakeven (évite SL trop serré en début de trade)
+        if (h1Indicators && existing.isBreakevenSet) {
           const chandelier = h1Indicators.chandelierExit;
           const currentSL = existing.tradeSetup.stopLoss;
           if (isBuy && chandelier > currentSL) {
@@ -394,19 +394,24 @@ async function runBackgroundMonitor() {
           const originalSL = existing.originalStopLoss ?? existing.tradeSetup.stopLoss;
           const initialRisk = Math.abs(existing.priceAtSignal - originalSL);
           if (initialRisk === 0) continue;
-          const pnl = (isBuy ? (currentPrice - existing.priceAtSignal) : (existing.priceAtSignal - currentPrice)) / initialRisk;
-          const status = pnl > 0.1 ? SignalStatus.WIN : SignalStatus.LOSS;
+          const grossPnl = (isBuy ? (currentPrice - existing.priceAtSignal) : (existing.priceAtSignal - currentPrice)) / initialRisk;
+          const netPnl = grossPnl - 0.05; // déduire spread/commission estimé
+          const status = netPnl > 0 ? SignalStatus.WIN : SignalStatus.LOSS;
 
-          const closedSignal = { ...existing, status, closePrice: currentPrice, closedAt: Date.now(), pnl: pnl - 0.05, isNew: false };
+          const closedSignal = { ...existing, status, closePrice: currentPrice, closedAt: Date.now(), pnl: netPnl, isNew: false };
           activeSignals = activeSignals.filter(s => s.id !== existing.id);
           tradeHistory = [closedSignal, ...tradeHistory].slice(0, 200);
 
+          // BUG FIX: activer le cooldown à la clôture TP/SL (pas seulement suppression manuelle)
+          // Évite le re-entry immédiat sur le même actif après close → cause de l'overtrading
+          mutedAssets[existing.asset] = Date.now() + COOLDOWN_MS;
           if (supabase) {
             await supabase.from('signals').delete().eq('id', existing.id);
             await supabase.from('history').insert({ id: existing.id, asset: existing.asset, pnl: closedSignal.pnl, content: closedSignal });
+            supabase.from('app_config').upsert({ key: 'mutedAssets', value: mutedAssets });
           }
 
-          await sendTelegramMessage(`🏁 *TRADE CLÔTURÉ* 🏁\n*Actif:* ${asset.name}\n*Résultat:* ${status === SignalStatus.WIN ? '✅ GAIN' : '❌ PERTE'}\n*Profit:* ${closedSignal.pnl.toFixed(2)}R\n*Prix de sortie:* ${currentPrice.toFixed(5)}`);
+          await sendTelegramMessage(`🏁 *TRADE CLÔTURÉ* 🏁\n*Actif:* ${asset.name}\n*Résultat:* ${status === SignalStatus.WIN ? '✅ GAIN' : '❌ PERTE'}\n*Profit:* ${closedSignal.pnl.toFixed(2)}R\n*Prix de sortie:* ${currentPrice.toFixed(5)}\n🔇 Cooldown 4h activé`);
         }
       } catch (error: any) {
         console.error(`Error tracking ${existing.asset}:`, error.message);
@@ -481,6 +486,31 @@ async function runBackgroundMonitor() {
           const riskR = Math.abs(candidate.price - decision.slPrice);
           const rewardR = Math.abs(decision.tpPrice - candidate.price);
 
+          // BUG FIX #3 : SL minimum = 0.5 × ATR H1 (évite les SL 3-pips qui se font toucher par le spread)
+          const minSlDistance = h1Ind.atr * 0.5;
+          if (riskR < minSlDistance) {
+            const dir = decision.direction;
+            decision.slPrice = dir === 'BUY'
+              ? candidate.price - h1Ind.atr * 2.0
+              : candidate.price + h1Ind.atr * 2.0;
+            console.log(`🔧 SL ajusté pour ${asset.symbol}: ${riskR.toFixed(5)} < min ${minSlDistance.toFixed(5)}, nouveau SL: ${decision.slPrice.toFixed(5)}`);
+          }
+
+          // BUG FIX #4 : R:R minimum 1.5 (évite les trades avec R:R < 1.5 qui détruisent l'expectancy)
+          const rrRatio = riskR > 0 ? rewardR / riskR : 0;
+          if (rrRatio < 1.5) {
+            // Étendre le TP pour atteindre 2:1
+            const dir = decision.direction;
+            decision.tpPrice = dir === 'BUY'
+              ? candidate.price + Math.abs(candidate.price - decision.slPrice) * 2.0
+              : candidate.price - Math.abs(candidate.price - decision.slPrice) * 2.0;
+            const newRR = Math.abs(decision.tpPrice - candidate.price) / Math.abs(candidate.price - decision.slPrice);
+            console.log(`🔧 TP ajusté pour ${asset.symbol}: R:R ${rrRatio.toFixed(2)} < 1.5, nouveau TP: ${decision.tpPrice.toFixed(5)} (R:R ${newRR.toFixed(2)})`);
+          }
+
+          const finalRiskR = Math.abs(candidate.price - decision.slPrice);
+          const finalRewardR = Math.abs(decision.tpPrice - candidate.price);
+
           const newSignal: Signal = {
             id: crypto.randomUUID(),
             asset: asset.symbol,
@@ -497,7 +527,7 @@ async function runBackgroundMonitor() {
               takeProfit: decision.tpPrice,
               positionSizeUnit: 1,
               riskAmount: decision.riskPercent,
-              riskRewardRatio: riskR > 0 ? rewardR / riskR : 0,
+              riskRewardRatio: finalRiskR > 0 ? finalRewardR / finalRiskR : 0,
               breakevenPrice: decision.direction === 'BUY'
                 ? candidate.price + h1Ind.atr * 1.5
                 : candidate.price - h1Ind.atr * 1.5,

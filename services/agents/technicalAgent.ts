@@ -8,7 +8,7 @@
 import Groq from 'groq-sdk';
 import { ScreenerCandidate } from './screenerAgent.ts';
 
-const getGroq = () => new Groq({ apiKey: process.env.GROQ_API_KEY });
+const getGroq = () => new Groq({ apiKey: process.env.GROQ_API_KEY, timeout: 10000 });
 
 export interface TechnicalAnalysis {
   score: number;           // 0-100
@@ -22,10 +22,10 @@ export interface TechnicalAnalysis {
 export async function runTechnicalAnalysis(candidate: ScreenerCandidate): Promise<TechnicalAnalysis> {
   const { h1Indicators: h1, m15Indicators: m15, price, asset } = candidate;
 
-  // Dernières 20 bougies H1 pour le contexte
-  const last20H1 = candidate.h1Data.history.slice(-20);
-  const last20Highs = candidate.h1Data.highs.slice(-20);
-  const last20Lows = candidate.h1Data.lows.slice(-20);
+  // Dernières 10 bougies H1 (prompt plus court = moins de timeouts Groq)
+  const last20H1 = candidate.h1Data.history.slice(-10);
+  const last20Highs = candidate.h1Data.highs.slice(-10);
+  const last20Lows = candidate.h1Data.lows.slice(-10);
 
   const prompt = `Tu es un analyste technique expert forex/crypto/indices. Analyse ces données et donne ton verdict.
 
@@ -78,6 +78,7 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
       ],
       temperature: 0.3,
       max_tokens: 500,
+      response_format: { type: 'json_object' },
     });
 
     const text = response.choices[0]?.message?.content?.trim() || '';

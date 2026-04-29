@@ -179,7 +179,7 @@ export const calculateIndicators = (
   strategy: StrategyParams, symbol: string = 'unknown'
 ): TechnicalIndicators | null => {
   const len = closes.length;
-  if (len < 800) return null;
+  if (len < 250) return null;
 
   const lastPrice = closes[len - 1];
   const ema20 = calculateEMA(closes, 20);
