@@ -153,7 +153,7 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, pas de commentaires) :
     }
 
     const confidence = Math.max(0, Math.min(100, parsed.confidence || 0));
-    const action = parsed.action === 'EXECUTE' && confidence >= 60 ? 'EXECUTE' : 'SKIP';
+    const action = parsed.action === 'EXECUTE' && confidence >= 70 ? 'EXECUTE' : 'SKIP';
 
     console.log(`✅ DecisionAgent ${candidate.asset.symbol}: Groq OK → ${action} conf=${confidence}`);
     return {

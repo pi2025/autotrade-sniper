@@ -56,6 +56,9 @@ let tradeHistory: Signal[] = [];
 let scanLogs: any[] = [];
 let marketData: Record<string, any> = {};
 let mutedAssets: Record<string, number> = {};
+// Compteur de trades par actif par jour (reset automatique à minuit)
+let dailyTradeCount: Record<string, number> = {};
+let dailyTradeCountDate = new Date().toDateString();
 type AgentMode = 'signals' | 'semi-auto' | 'autonomous';
 let agentMode: AgentMode = 'signals'; // défaut : détection uniquement, pas d'exécution
 let activeStrategy = DEFAULT_STRATEGY;
@@ -73,6 +76,15 @@ const brokerTradeIds = new Map<string, string>();
 const MAX_CURRENCY_EXPOSURE = 2;
 const MAX_LOGS = 50;
 const COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4 heures — évite le re-entry rapide après clôture
+const MAX_TRADES_PER_DAY_PER_ASSET = 2; // max 2 trades/jour/actif (anti-overtrading)
+// Actifs blacklistés — performance négative démontrée sur 100 trades, pas d'edge identifié
+const ASSET_BLACKLIST = new Set([
+  'EURJPY=X',  // -1.42R / 0% WR
+  'EURAUD=X',  // -1.09R / 0% WR
+  'USDCHF=X',  // -1.22R / 0% WR
+  'SOL-USD',   // -0.67R / 0% WR
+  'XRP-USD',   // -0.64R / 0% WR
+]);
 // Seuil de confiance minimum pour l'exécution autonome (configurable via env)
 const AUTONOMOUS_MIN_CONFIDENCE = parseInt(process.env.AUTONOMOUS_MIN_CONFIDENCE || '75', 10);
 
@@ -435,6 +447,14 @@ async function runBackgroundMonitor() {
         }
       }
 
+      // Reset compteur journalier à minuit
+      const todayStr = new Date().toDateString();
+      if (todayStr !== dailyTradeCountDate) {
+        dailyTradeCount = {};
+        dailyTradeCountDate = todayStr;
+        console.log('🔄 Compteur trades journaliers remis à zéro (nouveau jour)');
+      }
+
       // 2b. Agent 1 — Screener
       const { candidates, rejected } = runScreener(INITIAL_ASSETS, multiTFData, activeStrategy, mutedAssets);
       console.log(`📊 Screener: ${candidates.length} candidats, ${rejected.length} rejetés`);
@@ -454,6 +474,21 @@ async function runBackgroundMonitor() {
           console.log(`⚠️ Max trades atteint (${activeSignals.length}/${riskLimits.maxConcurrentTrades}) — arrêt du pipeline`);
           scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: candidate.asset.symbol, status: 'RISK_BLOCKED', reason: `Limite trades simultanés atteinte (${activeSignals.length}/${riskLimits.maxConcurrentTrades})` }, ...scanLogs].slice(0, MAX_LOGS);
           break;
+        }
+
+        // Filtre blacklist — actifs sans edge démontré
+        if (ASSET_BLACKLIST.has(candidate.asset.symbol)) {
+          console.log(`🚫 Blacklist: ${candidate.asset.symbol} ignoré`);
+          scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: candidate.asset.symbol, status: 'REJECTED', reason: 'Blacklist: performance négative sur 100 trades' }, ...scanLogs].slice(0, MAX_LOGS);
+          continue;
+        }
+
+        // Filtre max 2 trades/jour/actif
+        const todayCount = dailyTradeCount[candidate.asset.symbol] || 0;
+        if (todayCount >= MAX_TRADES_PER_DAY_PER_ASSET) {
+          console.log(`📅 Quota journalier atteint: ${candidate.asset.symbol} (${todayCount}/${MAX_TRADES_PER_DAY_PER_ASSET})`);
+          scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: candidate.asset.symbol, status: 'REJECTED', reason: `Quota journalier atteint (${todayCount}/${MAX_TRADES_PER_DAY_PER_ASSET} trades/jour)` }, ...scanLogs].slice(0, MAX_LOGS);
+          continue;
         }
 
         try {
@@ -553,6 +588,8 @@ async function runBackgroundMonitor() {
 
           if (isAllowed) {
             activeSignals.push(newSignal);
+            // Incrémenter le compteur journalier pour cet actif
+            dailyTradeCount[asset.symbol] = (dailyTradeCount[asset.symbol] || 0) + 1;
             scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'SUCCESS', reason: `Pipeline IA: ${decision.aiVerdict}` }, ...scanLogs].slice(0, MAX_LOGS);
 
             if (supabase) {
