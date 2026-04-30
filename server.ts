@@ -86,7 +86,8 @@ const ASSET_BLACKLIST = new Set([
   'XRP-USD',   // -0.64R / 0% WR
 ]);
 // Seuil de confiance minimum pour l'exécution autonome (configurable via env)
-const AUTONOMOUS_MIN_CONFIDENCE = parseInt(process.env.AUTONOMOUS_MIN_CONFIDENCE || '75', 10);
+const _parsedMinConf = parseInt(process.env.AUTONOMOUS_MIN_CONFIDENCE || '75', 10);
+const AUTONOMOUS_MIN_CONFIDENCE = isNaN(_parsedMinConf) ? 75 : Math.max(50, Math.min(100, _parsedMinConf));
 
 // Cache pour les données de marché (plafonné à 50 entrées pour éviter les fuites mémoire)
 const MAX_CACHE_SIZE = 50;
@@ -329,6 +330,16 @@ async function runBackgroundMonitor() {
         console.log(`🛡️ riskLimits restaurés:`, riskLimits);
       }
 
+      // CRITIQUE #3: Restaurer le compteur journalier (évite reset au redémarrage Render)
+      const { data: dailyCfg } = await supabase.from('app_config').select('value').eq('key', 'dailyTradeCount').single();
+      if (dailyCfg?.value) {
+        const saved = dailyCfg.value as { date: string; counts: Record<string, number> };
+        if (saved.date === new Date().toDateString()) {
+          dailyTradeCount = saved.counts;
+          console.log(`📅 dailyTradeCount restauré:`, dailyTradeCount);
+        }
+      }
+
       // Capital initial : récupéré une fois depuis le broker, puis persisté
       if (riskLimits.initialCapital === 0) {
         const acc = await getAccountBalance();
@@ -436,6 +447,7 @@ async function runBackgroundMonitor() {
       const multiTFData = new Map<string, { h1: any; m15: any; price: number }>();
       for (const asset of INITIAL_ASSETS) {
         if (!asset.active) continue;
+        if (ASSET_BLACKLIST.has(asset.symbol)) continue; // MINEUR #9: Skip avant fetch réseau
         if (activeSignals.find(s => s.asset === asset.symbol)) continue; // Skip si trade déjà ouvert
         try {
           const mtf = await fetchMultiTimeframe(asset.symbol);
@@ -518,6 +530,14 @@ async function runBackgroundMonitor() {
           // === SIGNAL VALIDÉ PAR LE COMITÉ IA ===
           const asset = candidate.asset;
           const h1Ind = candidate.h1Indicators;
+
+          // CRITIQUE #4: Guard null — historique H1 insuffisant pour calculer les indicateurs
+          if (!h1Ind) {
+            console.warn(`⚠️ h1Indicators null pour ${asset.symbol} — skip (historique insuffisant)`);
+            scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'REJECTED', reason: 'h1Indicators null — historique insuffisant' }, ...scanLogs].slice(0, MAX_LOGS);
+            continue;
+          }
+
           const riskR = Math.abs(candidate.price - decision.slPrice);
           const rewardR = Math.abs(decision.tpPrice - candidate.price);
 
@@ -531,15 +551,17 @@ async function runBackgroundMonitor() {
             console.log(`🔧 SL ajusté pour ${asset.symbol}: ${riskR.toFixed(5)} < min ${minSlDistance.toFixed(5)}, nouveau SL: ${decision.slPrice.toFixed(5)}`);
           }
 
-          // BUG FIX #4 : R:R minimum 1.5 (évite les trades avec R:R < 1.5 qui détruisent l'expectancy)
-          const rrRatio = riskR > 0 ? rewardR / riskR : 0;
+          // BUG FIX #4 : R:R minimum 1.5 — recalcule avec SL potentiellement corrigé (fix stale riskR)
+          const correctedRiskR = Math.abs(candidate.price - decision.slPrice);
+          const correctedRewardR = Math.abs(decision.tpPrice - candidate.price);
+          const rrRatio = correctedRiskR > 0 ? correctedRewardR / correctedRiskR : 0;
           if (rrRatio < 1.5) {
             // Étendre le TP pour atteindre 2:1
             const dir = decision.direction;
             decision.tpPrice = dir === 'BUY'
-              ? candidate.price + Math.abs(candidate.price - decision.slPrice) * 2.0
-              : candidate.price - Math.abs(candidate.price - decision.slPrice) * 2.0;
-            const newRR = Math.abs(decision.tpPrice - candidate.price) / Math.abs(candidate.price - decision.slPrice);
+              ? candidate.price + correctedRiskR * 2.0
+              : candidate.price - correctedRiskR * 2.0;
+            const newRR = Math.abs(decision.tpPrice - candidate.price) / correctedRiskR;
             console.log(`🔧 TP ajusté pour ${asset.symbol}: R:R ${rrRatio.toFixed(2)} < 1.5, nouveau TP: ${decision.tpPrice.toFixed(5)} (R:R ${newRR.toFixed(2)})`);
           }
 
@@ -588,8 +610,11 @@ async function runBackgroundMonitor() {
 
           if (isAllowed) {
             activeSignals.push(newSignal);
-            // Incrémenter le compteur journalier pour cet actif
+            // Incrémenter le compteur journalier pour cet actif + persistance Supabase
             dailyTradeCount[asset.symbol] = (dailyTradeCount[asset.symbol] || 0) + 1;
+            if (supabase) {
+              supabase.from('app_config').upsert({ key: 'dailyTradeCount', value: { date: new Date().toDateString(), counts: dailyTradeCount } });
+            }
             scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'SUCCESS', reason: `Pipeline IA: ${decision.aiVerdict}` }, ...scanLogs].slice(0, MAX_LOGS);
 
             if (supabase) {
@@ -631,7 +656,9 @@ async function runBackgroundMonitor() {
                   }
                 }
               } else {
+                // IMPORTANT #5: notifier explicitement quand signal EXECUTE mais confiance < seuil broker
                 scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'AUTO_SKIPPED', reason: `🤖 Seuil non atteint — Confiance ${decision.confidence}% < ${AUTONOMOUS_MIN_CONFIDENCE}%` }, ...scanLogs].slice(0, MAX_LOGS);
+                await sendTelegramMessage(`⚠️ *Signal créé mais NON exécuté* — ${asset.name}\nConfiance: ${decision.confidence}% (seuil autonome: ${AUTONOMOUS_MIN_CONFIDENCE}%)\nDirection: ${decision.direction} | Passe en semi-auto pour valider manuellement.`);
               }
             }
           } else {
@@ -981,7 +1008,7 @@ async function startServer() {
           await supabase.from('signals').delete().eq('id', signalId);
           supabase.from('app_config').upsert({ key: 'mutedAssets', value: mutedAssets });
         }
-        await sendTelegramMessage(`🔇 Signal *${signal.asset}* ignoré — cooldown 30 min activé.`);
+        await sendTelegramMessage(`🔇 Signal *${signal.asset}* ignoré — cooldown 4h activé.`);
       }
     }
   });
@@ -1013,11 +1040,12 @@ async function startServer() {
       const r = await groq.chat.completions.create({
         model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: 'Réponds UNIQUEMENT en JSON valide.' },
+          { role: 'system', content: 'Réponds UNIQUEMENT en JSON valide, sans markdown ni commentaires.' },
           { role: 'user', content: 'Analyse technique EURUSD: ADX 30, RSI 55, prix au-dessus EMA20. Réponds en JSON: {"score": <0-100>, "direction": "<BUY|SELL|NEUTRAL>", "reasoning": "<1 phrase>"}' }
         ],
         temperature: 0.3,
         max_tokens: 200,
+        response_format: { type: 'json_object' },
       });
       const text = r.choices[0]?.message?.content || '';
       const elapsed = Date.now() - start;
