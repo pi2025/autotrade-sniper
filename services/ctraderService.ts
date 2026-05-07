@@ -55,6 +55,7 @@ class CTraderService {
   private ws: WebSocket | null = null;
   private proto: protobuf.Root | null = null;
   private pendingCallbacks = new Map<string, (msg: any) => void>();
+  private pendingByPayloadType = new Map<number, (msg: any) => void>();
   private reconnectDelay = 1000;
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private authenticated = false;
@@ -120,10 +121,21 @@ class CTraderService {
       const payload = data.slice(4, 4 + length);
       const msg: any = ProtoMessage.decode(payload);
 
+      console.log(`📨 cTrader ← payloadType=${msg.payloadType} clientMsgId=${msg.clientMsgId ?? '—'}`);
+
+      // Priorité 1 : match par clientMsgId (réponse corrélée à notre requête)
       const clientMsgId = msg.clientMsgId;
       if (clientMsgId && this.pendingCallbacks.has(clientMsgId)) {
         const cb = this.pendingCallbacks.get(clientMsgId)!;
         this.pendingCallbacks.delete(clientMsgId);
+        cb(msg);
+        return;
+      }
+
+      // Priorité 2 : match par payloadType (fallback si le serveur n'échoue pas clientMsgId)
+      if (this.pendingByPayloadType.has(msg.payloadType)) {
+        const cb = this.pendingByPayloadType.get(msg.payloadType)!;
+        this.pendingByPayloadType.delete(msg.payloadType);
         cb(msg);
       }
     } catch (e) {
@@ -154,23 +166,29 @@ class CTraderService {
     this.ws.send(buf);
   }
 
-  private waitForResponse(clientMsgId: string, timeoutMs = 5000): Promise<any> {
+  private waitForResponse(clientMsgId: string, expectedPayloadType?: number, timeoutMs = 5000): Promise<any> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCallbacks.delete(clientMsgId);
+        if (expectedPayloadType) this.pendingByPayloadType.delete(expectedPayloadType);
         reject(new Error(`cTrader timeout: ${clientMsgId}`));
       }, timeoutMs);
 
-      this.pendingCallbacks.set(clientMsgId, (msg) => {
+      const handler = (msg: any) => {
         clearTimeout(timer);
+        this.pendingCallbacks.delete(clientMsgId);
+        if (expectedPayloadType) this.pendingByPayloadType.delete(expectedPayloadType);
         resolve(msg);
-      });
+      };
+
+      this.pendingCallbacks.set(clientMsgId, handler);
+      if (expectedPayloadType) this.pendingByPayloadType.set(expectedPayloadType, handler);
     });
   }
 
   private async applicationAuth(): Promise<void> {
     const msgId = 'app_auth';
-    const responsePromise = this.waitForResponse(msgId);
+    const responsePromise = this.waitForResponse(msgId, PT.APP_AUTH_RES);
     this.send(PT.APP_AUTH_REQ, 'ProtoOAApplicationAuthReq', {
       clientId: process.env.CTRADER_CLIENT_ID!,
       clientSecret: process.env.CTRADER_CLIENT_SECRET!,
@@ -181,7 +199,7 @@ class CTraderService {
 
   private async accountAuth(): Promise<void> {
     const msgId = 'acc_auth';
-    const responsePromise = this.waitForResponse(msgId);
+    const responsePromise = this.waitForResponse(msgId, PT.ACC_AUTH_RES);
     this.send(PT.ACC_AUTH_REQ, 'ProtoOAAccountAuthReq', {
       accessToken: process.env.CTRADER_ACCESS_TOKEN!,
       ctidTraderAccountId: this.accountId,
@@ -235,7 +253,7 @@ class CTraderService {
     if (volume === 0) return { error: 'Volume calculé à 0' };
 
     const msgId = `order_${Date.now()}`;
-    const responsePromise = this.waitForResponse(msgId);
+    const responsePromise = this.waitForResponse(msgId, PT.EXECUTION_EVT);
 
     this.send(PT.NEW_ORDER_REQ, 'ProtoOANewOrderReq', {
       ctidTraderAccountId: this.accountId,
@@ -262,7 +280,7 @@ class CTraderService {
     if (!this.authenticated) return { success: false };
 
     const msgId = `amend_${positionId}_${Date.now()}`;
-    const responsePromise = this.waitForResponse(msgId);
+    const responsePromise = this.waitForResponse(msgId, PT.EXECUTION_EVT);
 
     this.send(PT.AMEND_SL_REQ, 'ProtoOAAmendPositionSLTPReq', {
       ctidTraderAccountId: this.accountId,
@@ -283,7 +301,7 @@ class CTraderService {
     if (!this.authenticated) return { error: 'Non authentifié' };
 
     const msgId = `close_${positionId}_${Date.now()}`;
-    const responsePromise = this.waitForResponse(msgId);
+    const responsePromise = this.waitForResponse(msgId, PT.EXECUTION_EVT);
 
     this.send(PT.CLOSE_POS_REQ, 'ProtoOAClosePositionReq', {
       ctidTraderAccountId: this.accountId,
@@ -307,7 +325,7 @@ class CTraderService {
     if (!this.authenticated) return { balance: 0, equity: 0 };
 
     const msgId = `trader_${Date.now()}`;
-    const responsePromise = this.waitForResponse(msgId);
+    const responsePromise = this.waitForResponse(msgId, PT.TRADER_RES);
 
     this.send(PT.TRADER_REQ, 'ProtoOATraderReq', {
       ctidTraderAccountId: this.accountId,
@@ -329,7 +347,7 @@ class CTraderService {
     if (!this.authenticated) return [];
 
     const msgId = `reconcile_${Date.now()}`;
-    const responsePromise = this.waitForResponse(msgId);
+    const responsePromise = this.waitForResponse(msgId, PT.RECONCILE_RES);
 
     this.send(PT.RECONCILE_REQ, 'ProtoOAReconcileReq', {
       ctidTraderAccountId: this.accountId,
