@@ -275,7 +275,10 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const clearNotification = () => dispatch({ type: 'CLEAR_NOTIFICATION' });
   const deleteSignal = async (id: string, asset: string) => {
     try {
-      const res = await fetch(apiUrl(`/api/signals/${id}`), { method: 'DELETE' });
+      const res = await fetch(apiUrl(`/api/signals/${id}`), {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${process.env.VITE_APP_PASSWORD || ''}` },
+      });
       if (res.ok) {
         dispatch({ type: 'DELETE_SIGNAL', payload: { id, asset } });
       }
