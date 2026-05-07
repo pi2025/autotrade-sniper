@@ -8,6 +8,9 @@ import { createClient } from '@supabase/supabase-js';
 import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
+import type { AgentMode } from "./types.ts";
+import { ctraderService } from "./services/ctraderService.ts";
+import { agentController } from "./services/agentController.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -187,6 +190,20 @@ async function runBackgroundMonitor() {
     console.warn("📦 Supabase non configuré, démarrage avec état vide.");
   }
 
+  // Init agent controller (charge mode + limites depuis Supabase)
+  await agentController.init(supabase);
+
+  // Init cTrader si mode != SIGNALS_ONLY
+  if (agentController.getMode() !== 'SIGNALS_ONLY') {
+    try {
+      await ctraderService.init();
+      console.log('✅ cTrader service initialisé');
+    } catch (e: any) {
+      console.error('❌ cTrader init échoué:', e.message, '— mode forcé SIGNALS_ONLY');
+      await agentController.setMode('SIGNALS_ONLY');
+    }
+  }
+
   while (true) {
     if (!isEngineRunning) {
       await new Promise(r => setTimeout(r, 5000));
@@ -227,6 +244,10 @@ async function runBackgroundMonitor() {
                   await supabase.from('signals').update({ content: existing }).eq('id', existing.id);
                 }
                 await sendTelegramMessage(`🛡️ *BREAKEVEN ACTIVÉ* pour ${asset.name}\nLe Stop Loss a été déplacé au prix d'entrée (${existing.priceAtSignal.toFixed(5)}).`);
+                if (existing.ctraderPositionId) {
+                  await ctraderService.amendSL(existing.ctraderPositionId, existing.priceAtSignal);
+                  console.log(`🛡️ SL breakeven envoyé à cTrader pour ${existing.asset}`);
+                }
               }
             }
 
@@ -246,10 +267,17 @@ async function runBackgroundMonitor() {
               // Persistance
               activeSignals = activeSignals.filter(s => s.id !== existing.id);
               tradeHistory = [closedSignal, ...tradeHistory].slice(0, 200);
-              
+
+              if (existing.ctraderPositionId) {
+                const closeResult = await ctraderService.closePosition(existing.ctraderPositionId);
+                if (closeResult.alreadyClosed) {
+                  console.log(`ℹ️ Position ${existing.ctraderPositionId} déjà fermée par cTrader (SL/TP natif)`);
+                }
+              }
+
               if (supabase) {
                 await supabase.from('signals').delete().eq('id', existing.id);
-                await supabase.from('history').insert({ id: existing.id, asset: existing.asset, pnl: closedSignal.pnl, content: closedSignal });
+                await supabase.from('history').insert({ id: existing.id, asset: existing.asset, pnl: closedSignal.pnl, closed_at: new Date(closedSignal.closedAt).toISOString(), content: closedSignal });
               }
 
               await sendTelegramMessage(`
@@ -291,15 +319,44 @@ async function runBackgroundMonitor() {
               if (isAllowed) {
                 activeSignals.push(newSignal);
                 scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'SUCCESS', reason: diagnostic }, ...scanLogs].slice(0, MAX_LOGS);
-                await supabase.from('signals').insert({ id: newSignal.id, asset: newSignal.asset, timeframe: '15m', content: newSignal });
-                
-                await sendTelegramMessage(`
+                if (supabase) await supabase.from('signals').insert({ id: newSignal.id, asset: newSignal.asset, timeframe: '15m', content: newSignal });
+
+                const decision = agentController.shouldExecute(newSignal, activeSignals);
+
+                if (decision.execute) {
+                  const accountInfo = await ctraderService.getAccountInfo();
+                  const result = await ctraderService.placeOrder(newSignal, accountInfo.balance);
+                  if (result.positionId) {
+                    newSignal.ctraderPositionId = result.positionId;
+                    if (supabase) await supabase.from('signals').update({ content: newSignal }).eq('id', newSignal.id);
+                  }
+                  await sendTelegramMessage(`
+🚀 *SIGNAL EXÉCUTÉ* 🚀
+*Actif:* ${asset.name}
+*Action:* ${newSignal.type === SignalType.BUY ? '🟢 ACHAT' : '🔴 VENTE'}
+*Entrée:* ${data.price.toFixed(5)}
+*TP:* ${newSignal.tradeSetup.takeProfit.toFixed(5)} | *SL:* ${newSignal.tradeSetup.stopLoss.toFixed(5)}
+*Position ID:* ${result.positionId ?? 'N/A'}
+                  `);
+                } else if (decision.mode === 'SEMI_AUTO') {
+                  await sendTelegramMessage(`
+🔔 *SIGNAL EN ATTENTE DE VALIDATION* 🔔
+*Actif:* ${asset.name}
+*Action:* ${newSignal.type === SignalType.BUY ? '🟢 ACHAT' : '🔴 VENTE'}
+*Entrée:* ${data.price.toFixed(5)}
+*Confiance:* ${newSignal.confidence}%
+
+👉 Exécuter : /execute\\_${newSignal.id.substring(0, 8)}
+                  `);
+                } else {
+                  await sendTelegramMessage(`
 🚀 *NOUVEAU SIGNAL SNIPER V15* 🚀
 *Actif:* ${asset.name}
 *Action:* ${newSignal.type === SignalType.BUY ? '🟢 ACHAT' : '🔴 VENTE'}
 *Entrée:* ${data.price.toFixed(5)}
 *TP:* ${newSignal.tradeSetup.takeProfit.toFixed(5)} | *SL:* ${newSignal.tradeSetup.stopLoss.toFixed(5)}
-                `);
+                  `);
+                }
               } else {
                 scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'REJECTED', reason: reason }, ...scanLogs].slice(0, MAX_LOGS);
               }
@@ -317,6 +374,41 @@ async function runBackgroundMonitor() {
 
     lastScanTime = Date.now();
     lastBatchTimeMs = Date.now() - startTime;
+
+    // Sync drawdown + positions fermées côté broker
+    if (agentController.getMode() !== 'SIGNALS_ONLY' && ctraderService.isConnected()) {
+      const accountInfo = await ctraderService.getAccountInfo();
+      const emergencyTriggered = await agentController.checkDrawdown(accountInfo.balance);
+      if (emergencyTriggered) {
+        for (const sig of activeSignals) {
+          if (sig.ctraderPositionId) await ctraderService.closePosition(sig.ctraderPositionId);
+        }
+        activeSignals = [];
+        if (supabase) await supabase.from('signals').delete().neq('id', 'none');
+        await sendTelegramMessage("🚨 *ARRÊT D'URGENCE* — Drawdown max atteint. Toutes positions fermées.");
+      }
+
+      // Réconcilier positions ouvertes vs activeSignals
+      const openIds = new Set(await ctraderService.getOpenPositionIds());
+      for (const sig of [...activeSignals]) {
+        if (sig.ctraderPositionId && !openIds.has(sig.ctraderPositionId)) {
+          console.log(`📡 Position ${sig.ctraderPositionId} fermée par cTrader — sync`);
+          const currentPrice = marketData[sig.asset]?.price ?? sig.priceAtSignal;
+          const isBuy = sig.type === SignalType.BUY;
+          const initialRisk = Math.abs(sig.priceAtSignal - sig.tradeSetup.stopLoss);
+          const pnl = (isBuy ? (currentPrice - sig.priceAtSignal) : (sig.priceAtSignal - currentPrice)) / (initialRisk || 1);
+          const status = pnl > 0.1 ? SignalStatus.WIN : SignalStatus.LOSS;
+          const closedSignal = { ...sig, status, closePrice: currentPrice, closedAt: Date.now(), pnl: pnl - 0.05, isNew: false };
+          activeSignals = activeSignals.filter(s => s.id !== sig.id);
+          tradeHistory = [closedSignal, ...tradeHistory].slice(0, 200);
+          if (supabase) {
+            await supabase.from('signals').delete().eq('id', sig.id);
+            await supabase.from('history').insert({ id: sig.id, asset: sig.asset, pnl: closedSignal.pnl, closed_at: new Date(closedSignal.closedAt).toISOString(), content: closedSignal });
+          }
+        }
+      }
+    }
+
     await new Promise(r => setTimeout(r, 5 * 60 * 1000)); // Scan toutes les 5 min
   }
 }
@@ -340,6 +432,43 @@ async function startServer() {
     console.log("GET /api/health");
     res.json({ status: "ok", time: new Date().toISOString() });
   });
+
+  // --- OAUTH2 CTRADER (TEMPORAIRE — supprimer après obtention du token) ---
+  apiRouter.get("/ctrader/auth", (req, res) => {
+    const clientId = process.env.CTRADER_CLIENT_ID;
+    const redirectUri = 'http://localhost:3000/api/ctrader/callback';
+    const url = `https://connect.spotware.com/apps/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=trading`;
+    res.redirect(url);
+  });
+
+  apiRouter.get("/ctrader/callback", async (req, res) => {
+    const { code } = req.query;
+    if (!code) return res.status(400).send('Code manquant');
+    try {
+      const response = await fetch('https://connect.spotware.com/apps/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: code as string,
+          redirect_uri: 'http://localhost:3000/api/ctrader/callback',
+          client_id: process.env.CTRADER_CLIENT_ID!,
+          client_secret: process.env.CTRADER_CLIENT_SECRET!,
+        }).toString()
+      });
+      const data: any = await response.json();
+      res.send(`
+        <h2>✅ Token obtenu !</h2>
+        <p><strong>access_token:</strong> ${data.access_token}</p>
+        <p><strong>refresh_token:</strong> ${data.refresh_token}</p>
+        <p>Copie le access_token dans ton .env : CTRADER_ACCESS_TOKEN=...</p>
+      `);
+    } catch (e: any) {
+      res.status(500).send(`Erreur: ${e.message}`);
+    }
+  });
+  // --- FIN OAUTH2 TEMPORAIRE ---
+
   apiRouter.get("/signals", (req, res) => {
     console.log("GET /api/signals");
     res.json(activeSignals);
@@ -394,6 +523,67 @@ async function startServer() {
     }
     res.json({ success: true, mutedAssets });
   });
+  // --- AGENT CONTROLLER ENDPOINTS ---
+  apiRouter.get("/agent/status", async (req, res) => {
+    const accountInfo = ctraderService.isConnected()
+      ? await ctraderService.getAccountInfo()
+      : { balance: 0, equity: 0 };
+    res.json({
+      mode: agentController.getMode(),
+      limits: agentController.getLimits(),
+      connected: ctraderService.isConnected(),
+      balance: accountInfo.balance,
+      equity: accountInfo.equity,
+      openPositions: activeSignals.filter(s => s.ctraderPositionId).length,
+    });
+  });
+
+  apiRouter.post("/agent/mode", async (req, res) => {
+    const { mode } = req.body as { mode: AgentMode };
+    const valid: AgentMode[] = ['SIGNALS_ONLY', 'SEMI_AUTO', 'AUTONOMOUS', 'EMERGENCY_STOP'];
+    if (!valid.includes(mode)) return res.status(400).json({ error: 'Mode invalide' });
+    if (mode !== 'SIGNALS_ONLY' && !ctraderService.isConnected()) {
+      try { await ctraderService.init(); } catch (e: any) {
+        return res.status(500).json({ error: `cTrader init échoué: ${e.message}` });
+      }
+    }
+    await agentController.setMode(mode);
+    res.json({ success: true, mode });
+  });
+
+  apiRouter.post("/agent/limits", async (req, res) => {
+    const { maxSimultaneousTrades, maxRiskPercent, maxDrawdownPercent } = req.body;
+    await agentController.setLimits({ maxSimultaneousTrades, maxRiskPercent, maxDrawdownPercent });
+    res.json({ success: true, limits: agentController.getLimits() });
+  });
+
+  apiRouter.post("/agent/execute/:id", async (req, res) => {
+    const signal = activeSignals.find(s => s.id === req.params.id);
+    if (!signal) return res.status(404).json({ error: 'Signal non trouvé' });
+    if (signal.ctraderPositionId) return res.status(400).json({ error: 'Déjà exécuté' });
+    const accountInfo = await ctraderService.getAccountInfo();
+    const result = await ctraderService.placeOrder(signal, accountInfo.balance);
+    if (result.positionId) {
+      signal.ctraderPositionId = result.positionId;
+      if (supabase) await supabase.from('signals').update({ content: signal }).eq('id', signal.id);
+    }
+    res.json({ success: !result.error, ...result });
+  });
+
+  apiRouter.post("/agent/emergency-stop", async (req, res) => {
+    await agentController.setMode('EMERGENCY_STOP');
+    isEngineRunning = false;
+    const results = await Promise.allSettled(
+      activeSignals
+        .filter(s => s.ctraderPositionId)
+        .map(s => ctraderService.closePosition(s.ctraderPositionId!))
+    );
+    activeSignals = [];
+    if (supabase) await supabase.from('signals').delete().neq('id', 'none');
+    await sendTelegramMessage("🚨 *ARRÊT D'URGENCE ACTIVÉ* — Toutes positions fermées, moteur arrêté.");
+    res.json({ success: true, closedCount: results.length });
+  });
+
   apiRouter.delete("/signals/:id", async (req, res) => {
     const { id } = req.params;
     const signal = activeSignals.find(s => s.id === id);
