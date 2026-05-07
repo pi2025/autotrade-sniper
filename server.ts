@@ -434,14 +434,6 @@ async function startServer() {
     res.json({ status: "ok", time: new Date().toISOString() });
   });
 
-  // --- OAUTH2 CTRADER (TEMPORAIRE — supprimer après obtention du token) ---
-  apiRouter.get("/ctrader/auth", (req, res) => {
-    const clientId = process.env.CTRADER_CLIENT_ID;
-    const redirectUri = 'http://localhost:3000/auth/callback';
-    const url = `https://connect.spotware.com/apps/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=trading`;
-    res.redirect(url);
-  });
-  // --- FIN OAUTH2 TEMPORAIRE ---
 
   apiRouter.get("/signals", (req, res) => {
     console.log("GET /api/signals");
@@ -583,35 +575,6 @@ async function startServer() {
       res.status(500).json({ error: e.message });
     }
   });
-
-  // --- OAUTH2 CTRADER CALLBACK (TEMPORAIRE — supprimer après obtention du token) ---
-  app.get("/auth/callback", async (req, res) => {
-    const { code } = req.query;
-    if (!code) return res.status(400).send('Code manquant');
-    try {
-      const response = await fetch('https://connect.spotware.com/apps/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          code: code as string,
-          redirect_uri: 'http://localhost:3000/auth/callback',
-          client_id: process.env.CTRADER_CLIENT_ID!,
-          client_secret: process.env.CTRADER_CLIENT_SECRET!,
-        }).toString()
-      });
-      const data: any = await response.json();
-      res.send(`<!DOCTYPE html><html><body style="font-family:monospace;padding:2rem;background:#0f172a;color:#e2e8f0">
-        <h2 style="color:#34d399">✅ Token cTrader obtenu !</h2>
-        <p><strong>access_token :</strong></p>
-        <pre style="background:#1e293b;padding:1rem;border-radius:8px;word-break:break-all">${data.access_token ?? JSON.stringify(data)}</pre>
-        <p style="color:#94a3b8">Copie cette valeur dans ton <code>.env</code> :<br><code>CTRADER_ACCESS_TOKEN=&lt;valeur ci-dessus&gt;</code></p>
-      </body></html>`);
-    } catch (e: any) {
-      res.status(500).send(`Erreur: ${e.message}`);
-    }
-  });
-  // --- FIN OAUTH2 CALLBACK TEMPORAIRE ---
 
   // Appliquer le router API
   app.use("/api", apiRouter);
