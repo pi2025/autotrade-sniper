@@ -1,0 +1,101 @@
+syntax = "proto2";
+
+message ProtoMessage {
+  required uint32 payloadType = 1;
+  optional bytes payload = 2;
+  optional string clientMsgId = 3;
+}
+
+message ProtoHeartbeatEvent {
+  required uint32 payloadType = 1;
+}
+
+message ProtoOAApplicationAuthReq {
+  required uint32 payloadType = 1;
+  required string clientId = 2;
+  required string clientSecret = 3;
+}
+
+message ProtoOAApplicationAuthRes {
+  required uint32 payloadType = 1;
+}
+
+message ProtoOAAccountAuthReq {
+  required uint32 payloadType = 1;
+  required string accessToken = 2;
+  required int64 ctidTraderAccountId = 3;
+}
+
+message ProtoOAAccountAuthRes {
+  required uint32 payloadType = 1;
+  required int64 ctidTraderAccountId = 2;
+}
+
+message ProtoOANewOrderReq {
+  required uint32 payloadType = 1;
+  required int64 ctidTraderAccountId = 2;
+  required string symbolName = 3;
+  required int32 orderType = 4;
+  required int32 tradeSide = 5;
+  required int64 volume = 6;
+  optional double stopLoss = 9;
+  optional double takeProfit = 10;
+}
+
+message ProtoOAExecutionEvent {
+  required uint32 payloadType = 1;
+  required int64 ctidTraderAccountId = 2;
+  required int32 executionType = 3;
+  optional ProtoOAPosition position = 5;
+}
+
+message ProtoOAPosition {
+  required int64 positionId = 1;
+  required int32 tradeData = 2;
+  required int32 positionStatus = 3;
+  required int64 volume = 4;
+}
+
+message ProtoOAAmendPositionSLTPReq {
+  required uint32 payloadType = 1;
+  required int64 ctidTraderAccountId = 2;
+  required int64 positionId = 3;
+  optional double stopLoss = 4;
+  optional double takeProfit = 5;
+  optional bool guaranteedStopLoss = 6;
+}
+
+message ProtoOAClosePositionReq {
+  required uint32 payloadType = 1;
+  required int64 ctidTraderAccountId = 2;
+  required int64 positionId = 3;
+  required int64 volume = 4;
+}
+
+message ProtoOAReconcileReq {
+  required uint32 payloadType = 1;
+  required int64 ctidTraderAccountId = 2;
+}
+
+message ProtoOAReconcileRes {
+  required uint32 payloadType = 1;
+  required int64 ctidTraderAccountId = 2;
+  repeated ProtoOAPosition position = 3;
+}
+
+message ProtoOATraderReq {
+  required uint32 payloadType = 1;
+  required int64 ctidTraderAccountId = 2;
+}
+
+message ProtoOATraderRes {
+  required uint32 payloadType = 1;
+  required int64 ctidTraderAccountId = 2;
+  required ProtoOATrader trader = 3;
+}
+
+message ProtoOATrader {
+  required int64 ctidTraderAccountId = 1;
+  optional int64 balance = 3;
+  optional int64 moneyDigits = 7;
+}
