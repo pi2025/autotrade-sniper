@@ -616,7 +616,7 @@ async function startServer() {
   app.use("/api", apiRouter);
 
   // Gestionnaire 404 pour les routes /api/* (pour éviter le fallback HTML)
-  app.use("/api/*", (req, res) => {
+  app.use("/api/*wildcard", (req, res) => {
     res.status(404).json({ error: `API route not found: ${req.method} ${req.originalUrl}` });
   });
 
@@ -626,7 +626,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+    app.get('*wildcard', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
   }
 
   app.listen(PORT, "0.0.0.0", () => {
