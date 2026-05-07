@@ -1,4 +1,4 @@
-import WebSocket from 'ws';
+import net from 'net';
 import protobuf from 'protobufjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -37,7 +37,6 @@ const SYMBOL_MAP: Record<string, string> = {
   '^GSPC':    'SP500',   '^IXIC':    'NAS100',  '^FCHI':   'FRA40',
 };
 
-// --- USD-base pairs (unité de calcul inversée) ---
 const USD_BASE = new Set(['USDJPY', 'USDCAD', 'USDCHF']);
 
 export interface OrderResult {
@@ -52,18 +51,19 @@ export interface AccountInfo {
 }
 
 class CTraderService {
-  private ws: WebSocket | null = null;
+  private socket: net.Socket | null = null;
   private proto: protobuf.Root | null = null;
+  private buffer = Buffer.alloc(0);
   private pendingCallbacks = new Map<string, (msg: any) => void>();
   private pendingByPayloadType = new Map<number, (msg: any) => void>();
   private reconnectDelay = 1000;
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private authenticated = false;
 
-  private get host() {
+  private get tlsHost() {
     return process.env.CTRADER_LIVE === 'true'
-      ? 'wss://live.ctraderapi.com:5036'
-      : 'wss://demo.ctraderapi.com:5036';
+      ? 'live.ctraderapi.com'
+      : 'demo.ctraderapi.com'; // port 5035 = plain TCP, port 5036 = TLS
   }
 
   private get accountId(): number {
@@ -75,13 +75,15 @@ class CTraderService {
     await this.connect();
   }
 
-  private async connect(): Promise<void> {
+  private connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(this.host);
-      this.ws.binaryType = 'nodebuffer';
+      this.buffer = Buffer.alloc(0);
 
-      this.ws.on('open', async () => {
-        console.log('✅ cTrader WebSocket connecté');
+      // Port 5035 = TCP plain (demo), port 5036 = TCP+TLS (live)
+      this.socket = net.createConnection({ host: this.tlsHost, port: 5035 });
+
+      this.socket.on('connect', async () => {
+        console.log(`✅ cTrader TCP connecté à ${this.tlsHost}:5035`);
         this.reconnectDelay = 1000;
         try {
           await this.applicationAuth();
@@ -94,9 +96,12 @@ class CTraderService {
         }
       });
 
-      this.ws.on('message', (data: Buffer) => this.handleMessage(data));
+      this.socket.on('data', (chunk: Buffer) => {
+        this.buffer = Buffer.concat([this.buffer, chunk]);
+        this.processBuffer();
+      });
 
-      this.ws.on('close', () => {
+      this.socket.on('close', () => {
         console.warn('⚠️ cTrader déconnecté. Reconnexion dans', this.reconnectDelay, 'ms');
         this.authenticated = false;
         if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
@@ -106,33 +111,41 @@ class CTraderService {
         }, this.reconnectDelay);
       });
 
-      this.ws.on('error', (err) => {
-        console.error('❌ cTrader WebSocket error:', err.message);
+      this.socket.on('error', (err) => {
+        console.error('❌ cTrader socket error:', err.message);
         reject(err);
       });
     });
   }
 
-  private handleMessage(data: Buffer): void {
+  private processBuffer(): void {
+    while (this.buffer.length >= 4) {
+      const length = this.buffer.readUInt32BE(0);
+      if (this.buffer.length < 4 + length) break;
+
+      const payload = this.buffer.slice(4, 4 + length);
+      this.buffer = this.buffer.slice(4 + length);
+      this.handleMessage(payload);
+    }
+  }
+
+  private handleMessage(payload: Buffer): void {
     if (!this.proto) return;
     try {
       const ProtoMessage = this.proto.lookupType('ProtoMessage');
-      const length = data.readUInt32BE(0);
-      const payload = data.slice(4, 4 + length);
       const msg: any = ProtoMessage.decode(payload);
 
       console.log(`📨 cTrader ← payloadType=${msg.payloadType} clientMsgId=${msg.clientMsgId ?? '—'}`);
 
-      // Priorité 1 : match par clientMsgId (réponse corrélée à notre requête)
       const clientMsgId = msg.clientMsgId;
       if (clientMsgId && this.pendingCallbacks.has(clientMsgId)) {
         const cb = this.pendingCallbacks.get(clientMsgId)!;
         this.pendingCallbacks.delete(clientMsgId);
+        if (msg.payloadType) this.pendingByPayloadType.delete(msg.payloadType - 1);
         cb(msg);
         return;
       }
 
-      // Priorité 2 : match par payloadType (fallback si le serveur n'échoue pas clientMsgId)
       if (this.pendingByPayloadType.has(msg.payloadType)) {
         const cb = this.pendingByPayloadType.get(msg.payloadType)!;
         this.pendingByPayloadType.delete(msg.payloadType);
@@ -144,7 +157,7 @@ class CTraderService {
   }
 
   private send(payloadType: number, messageType: string, fields: object, clientMsgId?: string): void {
-    if (!this.proto || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.proto || !this.socket || this.socket.destroyed) return;
 
     const InnerMsg = this.proto.lookupType(messageType);
     const ProtoMessage = this.proto.lookupType('ProtoMessage');
@@ -163,10 +176,10 @@ class CTraderService {
     const buf = Buffer.allocUnsafe(4 + outerBytes.length);
     buf.writeUInt32BE(outerBytes.length, 0);
     outerBytes.copy(buf, 4);
-    this.ws.send(buf);
+    this.socket.write(buf);
   }
 
-  private waitForResponse(clientMsgId: string, expectedPayloadType?: number, timeoutMs = 5000): Promise<any> {
+  private waitForResponse(clientMsgId: string, expectedPayloadType?: number, timeoutMs = 8000): Promise<any> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCallbacks.delete(clientMsgId);
@@ -216,7 +229,7 @@ class CTraderService {
 
   private calculateVolume(signal: Signal, balance: number, symbolName: string): number {
     const riskMultiplier = (symbolName === 'EURUSD') ? 0.5 : 1;
-    const riskAmount = balance * (0.01 * riskMultiplier); // 1% × multiplier
+    const riskAmount = balance * (0.01 * riskMultiplier);
     const slDistance = Math.abs(signal.priceAtSignal - signal.tradeSetup.stopLoss);
     if (slDistance === 0) return 0;
 
@@ -231,17 +244,12 @@ class CTraderService {
       || signal.assetType === AssetType.COMMODITY
       || signal.assetType === AssetType.STOCK;
 
-    // FX: 1 API unit = 1000 base units → diviser par 1000
-    // Indices/Commodités: 1 API unit = 1 unité → arrondir à l'entier
     const apiVolume = isDiscrete
       ? Math.floor(baseUnits)
       : Math.round(baseUnits / 1000);
 
-    const MAX_VOLUME = 100; // 1 lot standard
-    return Math.max(1, Math.min(apiVolume, MAX_VOLUME));
+    return Math.max(1, Math.min(apiVolume, 100));
   }
-
-  // --- API publique ---
 
   async placeOrder(signal: Signal, balance: number): Promise<OrderResult> {
     if (!this.authenticated) return { error: 'cTrader non authentifié' };
@@ -258,8 +266,8 @@ class CTraderService {
     this.send(PT.NEW_ORDER_REQ, 'ProtoOANewOrderReq', {
       ctidTraderAccountId: this.accountId,
       symbolName,
-      orderType: 1, // MARKET
-      tradeSide: signal.type === SignalType.BUY ? 1 : 2, // 1=BUY, 2=SELL
+      orderType: 1,
+      tradeSide: signal.type === SignalType.BUY ? 1 : 2,
       volume,
       stopLoss: signal.tradeSetup.stopLoss,
       takeProfit: signal.tradeSetup.takeProfit,
@@ -306,14 +314,13 @@ class CTraderService {
     this.send(PT.CLOSE_POS_REQ, 'ProtoOAClosePositionReq', {
       ctidTraderAccountId: this.accountId,
       positionId: parseInt(positionId, 10),
-      volume: volume || 100000, // volume max pour clôture totale
+      volume: volume || 100000,
     }, msgId);
 
     try {
       await responsePromise;
       return { positionId };
     } catch (e: any) {
-      // Position déjà fermée côté broker → traiter comme succès silencieux
       if (e.message?.includes('POSITION_NOT_FOUND') || e.message?.includes('timeout')) {
         return { positionId, alreadyClosed: true };
       }
@@ -362,7 +369,7 @@ class CTraderService {
   }
 
   isConnected(): boolean {
-    return this.authenticated && this.ws?.readyState === WebSocket.OPEN;
+    return this.authenticated && !!this.socket && !this.socket.destroyed;
   }
 }
 
