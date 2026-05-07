@@ -19,6 +19,23 @@ export enum SignalStatus {
   LOSS = 'LOSS'
 }
 
+export type AgentMode = 'SIGNALS_ONLY' | 'SEMI_AUTO' | 'AUTONOMOUS' | 'EMERGENCY_STOP';
+
+export interface AgentLimits {
+  maxSimultaneousTrades: number;
+  maxRiskPercent: number;
+  maxDrawdownPercent: number;
+}
+
+export interface AgentStatus {
+  mode: AgentMode;
+  limits: AgentLimits;
+  connected: boolean;
+  balance: number;
+  equity: number;
+  openPositions: number;
+}
+
 export enum TimeFrame {
   M15 = '15m',
   H1 = '1h',
@@ -125,6 +142,7 @@ export interface Signal {
   scoreBreakdown: ScoreFactor[];
   estimatedDuration: string; 
   isBreakevenSet?: boolean;
+  ctraderPositionId?: string;
 }
 
 export interface AssetConfig {
