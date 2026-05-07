@@ -32,5 +32,7 @@ services:
         value: "1"
       - key: VITE_APP_PASSWORD
         sync: false
+      - key: GROQ_API_KEY
+        sync: false
       - key: API_SECRET_TOKEN
         sync: false

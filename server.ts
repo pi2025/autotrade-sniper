@@ -838,7 +838,7 @@ async function startServer() {
     res.json({
       ...status,
       initialCapital: riskLimits.initialCapital,
-      openTrades: openTrades.map(t => ({ tradeId: t.tradeId, symbol: t.symbol, direction: t.direction, units: t.units, pnl: t.pnl })),
+      openTrades: openTrades.map(t => ({ tradeId: t.tradeId, symbol: t.instrument, direction: t.units > 0 ? 'BUY' : 'SELL', units: Math.abs(t.units), pnl: t.unrealizedPnl })),
       openTradesCount: openTrades.length,
       drawdownPercent: status.balance && riskLimits.initialCapital > 0
         ? ((riskLimits.initialCapital - status.balance) / riskLimits.initialCapital * 100).toFixed(2)
@@ -949,7 +949,7 @@ async function startServer() {
   });
 
   apiRouter.post("/signals/:id/execute", sensitiveRateLimit, requireAuth, async (req, res) => {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const signal = activeSignals.find(s => s.id === id);
     if (!signal) return res.status(404).json({ error: "Signal non trouvé" });
     if (brokerTradeIds.has(id)) return res.status(409).json({ error: "Signal déjà exécuté sur cTrader" });
