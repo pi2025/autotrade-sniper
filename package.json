@@ -15,6 +15,7 @@
     "@types/express": "^5.0.6",
     "@types/node-fetch": "^2.6.13",
     "date-fns": "^4.1.0",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "lucide-react": "^0.555.0",
     "node-fetch": "^2.7.0",
