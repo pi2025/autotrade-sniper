@@ -22,12 +22,12 @@ export default defineConfig(({ mode }) => {
         }
       },
       define: {
-        // Injection sécurisée des clés API spécifiques
-        'process.env.API_KEY': JSON.stringify(env.API_KEY),
-        'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL),
-        'process.env.VITE_SUPABASE_KEY': JSON.stringify(env.VITE_SUPABASE_KEY),
-        // Fallback global (optionnel, mais gardé pour compatibilité rétroactive)
-        'process.env': JSON.stringify(env),
+        // SÉCURITÉ : injecter UNIQUEMENT les variables préfixées VITE_ côté client
+        // Jamais de secrets serveur (API_KEY, TELEGRAM_*, CTRADER_*, API_SECRET_TOKEN)
+        'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || ''),
+        'process.env.VITE_SUPABASE_KEY': JSON.stringify(env.VITE_SUPABASE_KEY || ''),
+        'process.env.VITE_APP_PASSWORD': JSON.stringify(env.VITE_APP_PASSWORD || ''),
+        'process.env.VITE_API_URL': JSON.stringify(env.VITE_API_URL || ''),
       },
       build: {
         outDir: 'dist',

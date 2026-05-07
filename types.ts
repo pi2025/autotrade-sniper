@@ -125,6 +125,7 @@ export interface Signal {
   scoreBreakdown: ScoreFactor[];
   estimatedDuration: string; 
   isBreakevenSet?: boolean;
+  originalStopLoss?: number; // SL initial avant breakeven — utilisé pour calculer le R correct
 }
 
 export interface AssetConfig {

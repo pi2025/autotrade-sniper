@@ -7,32 +7,32 @@ export const STRATEGIES: StrategyParams[] = [
     name: 'V18 Titan (Stabilized)',
     description: 'Filtres de tendance stricts. SL large (ATR 2.8x) et Breakout sur 12h pour ignorer le bruit du marché.',
     maShortPeriod: 20,
-    maLongPeriod: 50, 
-    adxThreshold: 32, // Plus strict
+    maLongPeriod: 50,
+    adxThreshold: 25, // Seuil standard institutionnel (>25 = tendance forte)
     entryType: 'DONCHIAN_BREAKOUT',
     donchianPeriod: 50, // Période plus longue (~12.5h)
     stopLossAtrMultiplier: 2.8, // SL plus large
-    exitType: 'ATR_TRAIL', 
-    riskPerTradePercent: 0.5, 
+    exitType: 'ATR_TRAIL',
+    riskPerTradePercent: 0.5,
     capitalBase: 10000,
-    breakevenTriggerR: 1.2, // Breakeven un peu plus tardif
+    breakevenTriggerR: 1.5, // Breakeven tardif — laisse le trade respirer
     exitLogic: 'ATR_TRAIL',
-    maxHoldPeriod: 400, // Permet aux trades de durer plus longtemps
+    maxHoldPeriod: 400,
   },
   {
     id: 'forex_sniper_v15_quantum',
     name: 'V15 Sniper Quantum',
-    description: 'Algorithme Sniper optimisé. Filtrage ADX/Slope Strict + Choppiness + Fan Widening.',
+    description: 'Algorithme Sniper optimisé. Filtrage ADX + Choppiness + Fan Widening. TP 2R réaliste.',
     maShortPeriod: 10,
-    maLongPeriod: 30, 
-    adxThreshold: 28,
+    maLongPeriod: 30,
+    adxThreshold: 22, // Seuil abaissé : >20 = tendance présente (littérature Wilder)
     entryType: 'DONCHIAN_BREAKOUT',
     donchianPeriod: 24,
     stopLossAtrMultiplier: 2.0,
-    exitType: 'ATR_TRAIL', 
-    riskPerTradePercent: 1.0, 
+    exitType: 'ATR_TRAIL',
+    riskPerTradePercent: 1.0,
     capitalBase: 10000,
-    breakevenTriggerR: 1.0,
+    breakevenTriggerR: 1.5, // Breakeven à 1.5R — évite les sorties à 0 sur pullback normal
     exitLogic: 'ATR_TRAIL',
     maxHoldPeriod: 200,
   }
@@ -179,7 +179,7 @@ export const calculateIndicators = (
   strategy: StrategyParams, symbol: string = 'unknown'
 ): TechnicalIndicators | null => {
   const len = closes.length;
-  if (len < 800) return null;
+  if (len < 250) return null;
 
   const lastPrice = closes[len - 1];
   const ema20 = calculateEMA(closes, 20);
@@ -192,8 +192,8 @@ export const calculateIndicators = (
   const atr = calculateATR(highs, lows, closes, 14);
   
   const adxValues = calculateADXValues(highs, lows, closes, 14);
-  const adx = adxValues[adxValues.length - 1] || 0;
-  const prevAdx = adxValues[adxValues.length - 2] || 0;
+  const adx = adxValues.length > 0 ? adxValues[adxValues.length - 1] : 0;
+  const prevAdx = adxValues.length > 1 ? adxValues[adxValues.length - 2] : 0;
   const adxSlope = adx > prevAdx ? 'RISING' : 'FALLING';
 
   const choppiness = calculateChoppiness(highs, lows, closes, 14);
@@ -210,19 +210,47 @@ export const calculateIndicators = (
     : lowestLow + (atr * strategy.stopLossAtrMultiplier);
 
   const m15Trend = lastPrice > ema50 ? 'BULL' : 'BEAR';
-  const h4Trend = lastPrice > emaH4 ? 'BULL' : 'BEAR';
+  // H4 trend basé sur EMA200 (standard institutionnel) au lieu de EMA800 (trop lent, trop de faux rejets)
+  const h4Trend = lastPrice > ema200 ? 'BULL' : 'BEAR';
 
-  const ema20_prev = calculateEMA(closes.slice(0, -1), 20);
-  const ema50_prev = calculateEMA(closes.slice(0, -1), 50);
-  const currentSpread = Math.abs(ema20 - ema50);
-  const prevSpread = Math.abs(ema20_prev - ema50_prev);
-  const isWidening = currentSpread > prevSpread;
+  // Fan Widening : moyenne du spread EMA20/50 sur 5 bougies vs 10 bougies
+  // Plus stable qu'une comparaison bougie-à-bougie (évite les faux rejets sur micro-pullback)
+  const spreadRecent: number[] = [];
+  const spreadOlder: number[] = [];
+  for (let i = 1; i <= 10; i++) {
+    const e20 = calculateEMA(closes.slice(0, -i), 20);
+    const e50 = calculateEMA(closes.slice(0, -i), 50);
+    const sp = Math.abs(e20 - e50);
+    if (i <= 5) spreadRecent.push(sp);
+    spreadOlder.push(sp);
+  }
+  const avgSpreadRecent = spreadRecent.reduce((a, b) => a + b, 0) / spreadRecent.length;
+  const avgSpreadOlder = spreadOlder.reduce((a, b) => a + b, 0) / spreadOlder.length;
+  const isWidening = avgSpreadRecent > avgSpreadOlder;
 
   return {
     maShort, maLong, maSlope: maShort - maLong, atr, adx, adxSlope, donchian, rsi, 
     ema20, ema50, ema200, emaH4, bollingerBands,
     trendContext: lastPrice > ema200 ? 'BULLISH' : 'BEARISH',
-    volumeTrend: 'NEUTRAL', marketPhase: MarketPhase.MARKUP,
+    volumeTrend: (() => {
+      if (!volumes || volumes.length < 40) return 'NEUTRAL' as const;
+      const recentVol = volumes.slice(-10).reduce((a, b) => a + b, 0) / 10;
+      const avgVol = volumes.slice(-40).reduce((a, b) => a + b, 0) / 40;
+      if (recentVol > avgVol * 1.3) return 'HIGH' as const;
+      if (recentVol < avgVol * 0.7) return 'LOW' as const;
+      return 'NEUTRAL' as const;
+    })(),
+    marketPhase: (() => {
+      // Wyckoff-inspired : prix vs EMAs + ADX
+      const aboveEma200 = lastPrice > ema200;
+      const aboveEma50 = lastPrice > ema50;
+      if (aboveEma200 && aboveEma50 && adx > 25) return MarketPhase.MARKUP;
+      if (!aboveEma200 && !aboveEma50 && adx > 25) return MarketPhase.MARKDOWN;
+      if (aboveEma200 && !aboveEma50) return MarketPhase.DISTRIBUTION;
+      if (!aboveEma200 && aboveEma50) return MarketPhase.ACCUMULATION;
+      // ADX faible = range → distribution ou accumulation selon la position
+      return aboveEma200 ? MarketPhase.DISTRIBUTION : MarketPhase.ACCUMULATION;
+    })(),
     chandelierExit,
     choppiness,
     lastPrices: closes.slice(-20), // On garde les 20 derniers prix pour l'IA
@@ -235,11 +263,32 @@ export const calculateIndicators = (
   } as any;
 };
 
+// Contexte économique pré-calculé par server.ts (évite de rendre analyzeMarket async)
+export interface EconomicContext {
+  isSoon: boolean;
+  events: { title: string; currency: string; minutesUntil: number }[];
+}
+
 export const analyzeMarket = (
-  symbol: string, price: number, ind: TechnicalIndicators | null, strategy: StrategyParams = DEFAULT_STRATEGY
+  symbol: string, price: number, ind: TechnicalIndicators | null,
+  strategy: StrategyParams = DEFAULT_STRATEGY,
+  economicContext?: EconomicContext
 ): { signal: any, diagnostic: string } => {
   if (!ind) return { signal: null, diagnostic: "Indicateurs insuffisants" };
-  
+
+  // Filtre macro — priorité maximale, avant tous les filtres techniques
+  if (economicContext?.isSoon) {
+    const labels = economicContext.events
+      .map(e => {
+        const when = e.minutesUntil < 0
+          ? `il y a ${Math.abs(e.minutesUntil)}min`
+          : `dans ${e.minutesUntil}min`;
+        return `${e.currency} ${e.title} (${when})`;
+      })
+      .join(' | ');
+    return { signal: null, diagnostic: `Rejet: Annonce imminente — ${labels}` };
+  }
+
   const isBullFan = price > ind.ema20 && ind.ema20 > ind.ema50 && ind.ema50 > ind.ema200;
   const isBearFan = price < ind.ema20 && ind.ema20 < ind.ema50 && ind.ema50 < ind.ema200;
 
@@ -251,7 +300,7 @@ export const analyzeMarket = (
 
   if (!mtfOk) return { signal: null, diagnostic: "Rejet: Désalignement Temporel M15/H4" };
   if (!isNotChoppy) return { signal: null, diagnostic: `Rejet: Marché trop haché (Choppiness: ${ind.choppiness.toFixed(1)})` };
-  if (!ind.bollingerBands.isSqueezing) return { signal: null, diagnostic: `Rejet: Volatilité explosive (No Squeeze)` };
+  // Bollinger Squeeze = bonus de qualité, pas un bloqueur (trop restrictif sinon)
   if (!isAdxStrong) return { signal: null, diagnostic: `Rejet: ADX ${ind.adx.toFixed(1)} < ${strategy.adxThreshold}` };
   if (!isAdxRising) return { signal: null, diagnostic: "Rejet: Momentum en baisse" };
   if (!isWidening) return { signal: null, diagnostic: "Rejet: Tendance s'essouffle (Fan narrowing)" };
@@ -259,7 +308,11 @@ export const analyzeMarket = (
   if (ind.rsi > 72) return { signal: null, diagnostic: `Rejet: RSI Sur-acheté (${ind.rsi.toFixed(1)})` };
   if (ind.rsi < 28) return { signal: null, diagnostic: `Rejet: RSI Sur-vendu (${ind.rsi.toFixed(1)})` };
 
-  const buffer = price * 0.001; 
+  // Guard ATR=0 — données insuffisantes ou marché fermé
+  if (!ind.atr || ind.atr <= 0) return { signal: null, diagnostic: "Rejet: ATR nul — données insuffisantes" };
+
+  // Buffer basé sur ATR (adaptif à la volatilité) au lieu de % fixe
+  const buffer = ind.atr * 0.15;
   let type = null;
   
   if (price > (ind.donchian.upper + buffer) && isBullFan) {
@@ -273,14 +326,28 @@ export const analyzeMarket = (
     return { signal: null, diagnostic: `Rejet: ${reason}` };
   }
 
-  const winProbability = Math.floor(68 + Math.min(ind.adx/5, 12));
+  // Score composite réel basé sur la qualité des conditions
+  let qualityScore = 50; // base neutre
+  // ADX fort et croissant = meilleure probabilité
+  qualityScore += Math.min((ind.adx - strategy.adxThreshold) * 1.5, 15);
+  // Choppiness bas = tendance propre
+  qualityScore += ind.choppiness < 40 ? 10 : ind.choppiness < 50 ? 5 : 0;
+  // Fan widening = momentum croissant
+  qualityScore += isWidening ? 5 : 0;
+  // MTF alignment = confirmation multi-timeframe
+  qualityScore += mtfOk ? 8 : 0;
+  // Bollinger squeeze = compression avant expansion
+  qualityScore += ind.bollingerBands.isSqueezing ? 7 : 0;
+  // RSI dans zone saine (pas extrême)
+  qualityScore += (ind.rsi > 35 && ind.rsi < 65) ? 5 : 0;
+  const winProbability = Math.max(40, Math.min(95, Math.floor(qualityScore)));
 
   const atrBuffer = ind.atr * strategy.stopLossAtrMultiplier;
   const stopLoss = type === SignalType.BUY ? price - atrBuffer : price + atrBuffer;
   const riskDistance = Math.abs(price - stopLoss);
   
-  // V18 Titan: Objectif TP très lointain pour laisser le Trailing Stop (Chandelier) faire le travail.
-  const rrRatio = 10; 
+  // TP réaliste : 2R pour M15 — atteignable avant que le trailing stop ne ferme le trade
+  const rrRatio = 2;
   const takeProfit = type === SignalType.BUY ? price + (riskDistance * rrRatio) : price - (riskDistance * rrRatio);
   
   let estimatedDuration = "~3-8 Jours";
@@ -294,23 +361,24 @@ export const analyzeMarket = (
   }
 
   return {
-    diagnostic: "🎯 Signal TITAN V18 Validé !",
+    diagnostic: `🎯 Signal validé (score: ${winProbability}%)`,
     signal: {
       type, 
       strength: winProbability, 
       winProbability, 
       reasoning: [
-        `Tendance de fond H4 confirmée`,
-        `Compression de Volatilité (Squeeze)`,
+        `Tendance de fond H4 confirmée (${ind.mtfAlignment?.h4})`,
         `Triple EMA Fan (20/50/200) aligné`,
-        `Momentum ADX puissant et croissant (${ind.adx.toFixed(1)})`,
-        `Stop-loss large pour absorber la volatilité`
+        `Momentum ADX: ${ind.adx.toFixed(1)} (${ind.adxSlope})`,
+        `Choppiness: ${ind.choppiness.toFixed(1)} — marché tendanciel`,
+        ...(ind.bollingerBands.isSqueezing ? [`Compression de Volatilité (Squeeze) détectée`] : []),
       ],
       scoreBreakdown: [
-        {label: 'Alignement H4', score: 35, type: 'POSITIVE'},
-        {label: 'Squeeze Volatilité', score: 25, type: 'POSITIVE'},
-        {label: 'Triple Fan', score: 20, type: 'POSITIVE'},
-        {label: 'Momentum ADX', score: 20, type: 'POSITIVE'}
+        {label: 'Alignement H4', score: 30, type: 'POSITIVE'},
+        {label: 'Triple Fan', score: 25, type: 'POSITIVE'},
+        {label: 'Momentum ADX', score: 25, type: 'POSITIVE'},
+        ...(ind.bollingerBands.isSqueezing ? [{label: 'Squeeze Volatilité', score: 15, type: 'POSITIVE' as const}] : []),
+        {label: 'Choppiness bas', score: ind.choppiness < 40 ? 10 : 5, type: ind.choppiness < 45 ? 'POSITIVE' as const : 'NEUTRAL' as const},
       ],
       estimatedDuration,
       tradeSetup: {

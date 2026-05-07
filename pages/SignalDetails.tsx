@@ -7,7 +7,7 @@ import {
   ArrowLeft, Bot, Calculator, ArrowUpRight, ArrowDownRight, Activity, Zap, Check, X, AlertTriangle, ExternalLink, Globe, Newspaper, Hourglass, Trash2, ShieldAlert
 } from 'lucide-react';
 import { YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Area, AreaChart, Line, CartesianGrid, ReferenceArea } from 'recharts';
-import { generateSignalExplanation } from '../services/geminiService';
+import { apiUrl } from '../services/api';
 
 const SignalDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -15,7 +15,7 @@ const SignalDetails: React.FC = () => {
   const { signals = [], marketData = {}, updateSignalExplanation, deleteSignal } = useSignals();
   
   const [loadingAi, setLoadingAi] = useState(false);
-  const [aiData, setAiData] = useState<{text: string, sources: any[]}>({ text: "", sources: [] });
+  const [aiData, setAiData] = useState<{text: string, sources: any[], macroScore: number}>({ text: "", sources: [], macroScore: 50 });
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   const signal = (signals || []).find(s => s.id === id);
@@ -25,7 +25,8 @@ const SignalDetails: React.FC = () => {
     if (signal && !aiData.text && !loadingAi) {
       const fetchAi = async () => {
         setLoadingAi(true);
-        const data = await generateSignalExplanation(signal);
+        const res = await fetch(apiUrl(`/api/signals/${signal.id}/analyze`), { method: 'POST' });
+        const data = await res.json();
         setAiData(data);
         updateSignalExplanation(signal.id, data.text);
         setLoadingAi(false);
@@ -214,10 +215,17 @@ const SignalDetails: React.FC = () => {
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-xl">
              <div className="flex items-center justify-between mb-8">
                 <div className="flex items-center gap-3 text-cyan-400 font-black uppercase text-sm">
-                    <Bot className="w-6 h-6" /> 
+                    <Bot className="w-6 h-6" />
                     Synthèse Macro Quantum
                 </div>
-                {loadingAi && <Activity className="w-4 h-4 animate-spin text-slate-500" />}
+                <div className="flex items-center gap-3">
+                  {aiData.macroScore !== 50 && (
+                    <div className={`text-xs font-bold px-2 py-1 rounded-lg ${aiData.macroScore >= 65 ? 'bg-emerald-500/20 text-emerald-400' : aiData.macroScore >= 45 ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'}`}>
+                      Score Macro IA : {aiData.macroScore}/100
+                    </div>
+                  )}
+                  {loadingAi && <Activity className="w-4 h-4 animate-spin text-slate-500" />}
+                </div>
              </div>
              
              <div className="prose prose-invert max-w-none">

@@ -6,8 +6,9 @@ interface Props {
   children: React.ReactNode;
 }
 
-// Sécurisation via Variable d'Environnement avec fallback
-const APP_PASSWORD = process.env.VITE_APP_PASSWORD || 'QUANTUM'; 
+// SÉCURITÉ : mot de passe via .env uniquement — pas de fallback en production
+const APP_PASSWORD = process.env.VITE_APP_PASSWORD;
+if (!APP_PASSWORD) console.warn('⚠️ VITE_APP_PASSWORD non défini dans .env — l\'accès sera bloqué');
 
 export const LoginGate: React.FC<Props> = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);

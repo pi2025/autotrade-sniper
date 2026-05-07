@@ -11,11 +11,13 @@
   },
   "dependencies": {
     "@google/genai": "^1.31.0",
+    "@reiryoku/ctrader-layer": "^2.2.0",
     "@supabase/supabase-js": "^2.45.0",
     "@types/express": "^5.0.6",
     "@types/node-fetch": "^2.6.13",
     "date-fns": "^4.1.0",
     "express": "^5.2.1",
+    "groq-sdk": "^1.1.2",
     "lucide-react": "^0.555.0",
     "node-fetch": "^2.7.0",
     "react": "^19.2.1",
