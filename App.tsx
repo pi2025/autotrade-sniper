@@ -8,6 +8,7 @@ import Scanner from './pages/Scanner';
 import Admin from './pages/Admin';
 import { LoginGate } from './components/LoginGate';
 import Backtest from './pages/Backtest';
+import AgentCenter from './pages/AgentCenter';
 
 const App: React.FC = () => {
   return (
@@ -21,6 +22,7 @@ const App: React.FC = () => {
               <Route path="/signal/:id" element={<SignalDetails />} />
               <Route path="/admin" element={<Admin />} />
               <Route path="/backtest" element={<Backtest />} />
+              <Route path="/agent" element={<AgentCenter />} />
             </Routes>
           </Layout>
         </HashRouter>

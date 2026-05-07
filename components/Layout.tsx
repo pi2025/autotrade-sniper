@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Activity, Volume2, VolumeX, Radar, Database, Wifi, WifiOff, AlertTriangle, Settings, ShieldAlert, X, ArrowRight, CloudLightning, History } from 'lucide-react';
+import { LayoutDashboard, Activity, Volume2, VolumeX, Radar, Database, Wifi, WifiOff, AlertTriangle, Settings, ShieldAlert, Shield, X, ArrowRight, CloudLightning, History } from 'lucide-react';
 import { useSignals } from '../context/SignalsContext';
 import { checkConnection } from '../services/supabaseClient';
 
@@ -92,6 +92,9 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           <NavLink to="/admin" className={({ isActive }) => `flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${isActive ? 'bg-emerald-500/10 text-emerald-400 font-medium' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}>
             <Settings className="w-5 h-5" /> <span>Administration</span>
           </NavLink>
+          <NavLink to="/agent" className={({ isActive }) => `flex items-center gap-3 px-3 py-3 rounded-xl transition-all ${isActive ? 'bg-cyan-500/10 text-cyan-400 font-medium' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}>
+            <Shield className="w-5 h-5" /> <span>Agent Control</span>
+          </NavLink>
         </nav>
 
         <div className="p-4 border-t border-slate-800 space-y-4">
@@ -117,6 +120,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           <NavLink to="/scanner" className={({ isActive }) => `flex flex-col items-center gap-1 p-2 rounded-lg transition-all ${isActive ? 'text-violet-400' : 'text-slate-500'}`}><Radar className="w-6 h-6" /><span className="text-[10px] font-medium">Radar</span></NavLink>
           <NavLink to="/backtest" className={({ isActive }) => `flex flex-col items-center gap-1 p-2 rounded-lg transition-all ${isActive ? 'text-amber-400' : 'text-slate-500'}`}><History className="w-6 h-6" /><span className="text-[10px] font-medium">Test</span></NavLink>
           <NavLink to="/admin" className={({ isActive }) => `flex flex-col items-center gap-1 p-2 rounded-lg transition-all ${isActive ? 'text-emerald-400' : 'text-slate-500'}`}><Settings className="w-6 h-6" /><span className="text-[10px] font-medium">Admin</span></NavLink>
+          <NavLink to="/agent" className={({ isActive }) => `flex flex-col items-center gap-1 p-2 rounded-lg transition-all ${isActive ? 'text-cyan-400' : 'text-slate-500'}`}><Shield className="w-6 h-6" /><span className="text-[10px] font-medium">Agent</span></NavLink>
       </nav>
 
       <main className="flex-1 lg:ml-64 p-4 lg:p-8 overflow-x-hidden mb-20 lg:mb-0">
