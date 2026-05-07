@@ -79,11 +79,13 @@ const COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4 heures — évite le re-entry rapid
 const MAX_TRADES_PER_DAY_PER_ASSET = 2; // max 2 trades/jour/actif (anti-overtrading)
 // Actifs blacklistés — performance négative démontrée sur 100 trades, pas d'edge identifié
 const ASSET_BLACKLIST = new Set([
-  'EURJPY=X',  // -1.42R / 0% WR
-  'EURAUD=X',  // -1.09R / 0% WR
-  'USDCHF=X',  // -1.22R / 0% WR
-  'SOL-USD',   // -0.67R / 0% WR
-  'XRP-USD',   // -0.64R / 0% WR
+  'EURJPY=X',  // -2.85R / 0% WR (3 trades)
+  'EURAUD=X',  // -1.09R / 0% WR (2 trades)
+  'USDCHF=X',  // -1.74R / 0% WR (6 trades)
+  'SOL-USD',   // -0.72R / 0% WR (5 trades)
+  'XRP-USD',   // -0.64R / 0% WR (2 trades)
+  'AUDUSD=X',  // -2.64R / 7%  WR (14 trades) — ajouté analyse 159 trades
+  'EURGBP=X',  // -1.67R / 0%  WR (3 trades)
 ]);
 // Seuil de confiance minimum pour l'exécution autonome (configurable via env)
 const _parsedMinConf = parseInt(process.env.AUTONOMOUS_MIN_CONFIDENCE || '75', 10);
@@ -525,6 +527,21 @@ async function runBackgroundMonitor() {
           if (decision.action === 'SKIP') {
             scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: candidate.asset.symbol, status: 'REJECTED', reason: `Pipeline IA: ${decision.aiVerdict}` }, ...scanLogs].slice(0, MAX_LOGS);
             continue;
+          }
+
+          // Filtre SHORT strict — SHORT: -7.00R vs LONG: +1.88R sur 159 trades
+          // Exige ADX > 35 ET macro BEARISH explicite pour autoriser un short
+          if (decision.direction === 'SELL') {
+            const h1Adx = candidate.h1Indicators?.adx ?? 0;
+            const macroBearish = macro.bias === 'BEARISH';
+            if (h1Adx <= 35 || !macroBearish) {
+              const reason = h1Adx <= 35
+                ? `SHORT bloqué: ADX H1 ${h1Adx.toFixed(1)} ≤ 35 (tendance baissière insuffisante)`
+                : `SHORT bloqué: macro ${macro.bias} — biais BEARISH requis`;
+              console.log(`🚫 ${reason} pour ${candidate.asset.symbol}`);
+              scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: candidate.asset.symbol, status: 'REJECTED', reason }, ...scanLogs].slice(0, MAX_LOGS);
+              continue;
+            }
           }
 
           // === SIGNAL VALIDÉ PAR LE COMITÉ IA ===
