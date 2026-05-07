@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import * as protobuf from 'protobufjs';
+import protobuf from 'protobufjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Signal, SignalType, AssetType } from '../types.ts';
