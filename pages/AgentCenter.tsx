@@ -1,12 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, Zap, Eye, AlertTriangle, Save, RefreshCw } from 'lucide-react';
-import type { AgentMode, AgentLimits, AgentStatus } from '../types';
 
-const MODES: { id: AgentMode; label: string; desc: string; color: string; icon: React.ReactNode }[] = [
-  { id: 'SIGNALS_ONLY', label: 'SIGNAUX SEULS', desc: 'Détection uniquement, aucune exécution', color: 'slate', icon: <Eye className="w-5 h-5" /> },
-  { id: 'SEMI_AUTO',    label: 'SEMI-AUTO',     desc: 'Validation manuelle via Telegram',        color: 'amber',  icon: <Zap className="w-5 h-5" /> },
-  { id: 'AUTONOMOUS',   label: 'AUTONOME',       desc: 'Exécution automatique avec gestion du risque', color: 'emerald', icon: <Shield className="w-5 h-5" /> },
-  { id: 'EMERGENCY_STOP', label: "ARRÊT D'URGENCE", desc: 'Ferme tout et arrête le moteur', color: 'rose', icon: <AlertTriangle className="w-5 h-5" /> },
+// Modes UI → valeurs serveur (claude/great-sammet)
+type UIMode = 'SIGNALS_ONLY' | 'SEMI_AUTO' | 'AUTONOMOUS' | 'EMERGENCY_STOP';
+const UI_TO_SERVER: Record<string, string> = {
+  SIGNALS_ONLY:  'signals',
+  SEMI_AUTO:     'semi-auto',
+  AUTONOMOUS:    'autonomous',
+};
+const SERVER_TO_UI: Record<string, UIMode> = {
+  signals:    'SIGNALS_ONLY',
+  'semi-auto': 'SEMI_AUTO',
+  autonomous: 'AUTONOMOUS',
+};
+
+const MODES: { id: UIMode; label: string; desc: string; color: string; icon: React.ReactNode }[] = [
+  { id: 'SIGNALS_ONLY',  label: 'SIGNAUX SEULS',  desc: 'Détection uniquement, aucune exécution',             color: 'slate',   icon: <Eye className="w-5 h-5" /> },
+  { id: 'SEMI_AUTO',     label: 'SEMI-AUTO',       desc: 'Validation manuelle via Telegram',                  color: 'amber',   icon: <Zap className="w-5 h-5" /> },
+  { id: 'AUTONOMOUS',    label: 'AUTONOME',        desc: 'Exécution automatique avec gestion du risque',      color: 'emerald', icon: <Shield className="w-5 h-5" /> },
+  { id: 'EMERGENCY_STOP',label: "ARRÊT D'URGENCE", desc: 'Ferme tout et arrête le moteur',                    color: 'rose',    icon: <AlertTriangle className="w-5 h-5" /> },
 ];
 
 const colorMap: Record<string, string> = {
@@ -16,20 +28,47 @@ const colorMap: Record<string, string> = {
   rose:    'bg-rose-500/10 border-rose-500/30 text-rose-400',
 };
 
+const AUTH = () => `Bearer ${import.meta.env.VITE_APP_PASSWORD ?? ''}`;
+
+interface Limits {
+  maxSimultaneousTrades: number;
+  maxRiskPercent: number;
+  maxDrawdownPercent: number;
+}
+
+interface EngineStatus {
+  isRunning: boolean;
+  agentMode: string;
+  riskLimits: {
+    maxConcurrentTrades: number;
+    maxTotalRiskPercent: number;
+    maxDrawdownPercent: number;
+    initialCapital?: number;
+  };
+  activeCount: number;
+}
+
 const AgentCenter: React.FC = () => {
-  const [status, setStatus] = useState<AgentStatus | null>(null);
-  const [limits, setLimits] = useState<AgentLimits>({ maxSimultaneousTrades: 3, maxRiskPercent: 5, maxDrawdownPercent: 15 });
+  const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
+  const [limits, setLimits] = useState<Limits>({ maxSimultaneousTrades: 3, maxRiskPercent: 5, maxDrawdownPercent: 15 });
   const [saving, setSaving] = useState(false);
+  const [modeLoading, setModeLoading] = useState(false);
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch('/api/agent/status');
+      const res = await fetch('/api/engine/status');
       if (!res.ok) return;
-      const contentType = res.headers.get('content-type');
-      if (!contentType?.includes('application/json')) return;
-      const data = await res.json();
-      setStatus(data);
-      if (data.limits) setLimits(data.limits);
+      const ct = res.headers.get('content-type');
+      if (!ct?.includes('application/json')) return;
+      const data: EngineStatus = await res.json();
+      setEngineStatus(data);
+      if (data.riskLimits) {
+        setLimits({
+          maxSimultaneousTrades: data.riskLimits.maxConcurrentTrades ?? 3,
+          maxRiskPercent:        data.riskLimits.maxTotalRiskPercent ?? 5,
+          maxDrawdownPercent:    data.riskLimits.maxDrawdownPercent  ?? 15,
+        });
+      }
     } catch {}
   };
 
@@ -39,25 +78,50 @@ const AgentCenter: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const setMode = async (mode: AgentMode) => {
-    if (mode === 'AUTONOMOUS' && !confirm('Activer le mode AUTONOME ? Les ordres seront exécutés automatiquement.')) return;
-    if (mode === 'EMERGENCY_STOP' && !confirm("ARRÊT D'URGENCE : fermer toutes les positions et arrêter le moteur ?")) return;
+  const setMode = async (uiMode: UIMode) => {
+    if (uiMode === 'AUTONOMOUS' && !confirm('Activer le mode AUTONOME ? Les ordres seront exécutés automatiquement.')) return;
+    if (uiMode === 'EMERGENCY_STOP' && !confirm("ARRÊT D'URGENCE : fermer toutes les positions et arrêter le moteur ?")) return;
 
-    const endpoint = mode === 'EMERGENCY_STOP' ? '/api/agent/emergency-stop' : '/api/agent/mode';
-    const body = mode === 'EMERGENCY_STOP' ? {} : { mode };
-
-    await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    await fetchStatus();
+    setModeLoading(true);
+    try {
+      if (uiMode === 'EMERGENCY_STOP') {
+        await fetch('/api/agent/emergency-stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': AUTH() },
+          body: JSON.stringify({}),
+        });
+      } else {
+        const serverMode = UI_TO_SERVER[uiMode];
+        await fetch('/api/engine/mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': AUTH() },
+          body: JSON.stringify({ mode: serverMode }),
+        });
+      }
+      await fetchStatus();
+    } catch {}
+    setModeLoading(false);
   };
 
   const saveLimits = async () => {
     setSaving(true);
-    await fetch('/api/agent/limits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(limits) });
+    try {
+      await fetch('/api/engine/risk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': AUTH() },
+        body: JSON.stringify({
+          maxConcurrentTrades: limits.maxSimultaneousTrades,
+          maxTotalRiskPercent: limits.maxRiskPercent,
+          maxDrawdownPercent:  limits.maxDrawdownPercent,
+        }),
+      });
+      await fetchStatus();
+    } catch {}
     setSaving(false);
-    await fetchStatus();
   };
 
-  const currentMode = status?.mode ?? 'SIGNALS_ONLY';
+  const currentMode: UIMode = SERVER_TO_UI[engineStatus?.agentMode ?? ''] ?? 'SIGNALS_ONLY';
+  const isConnected = false; // cTrader status not in engine/status, show as info only
 
   return (
     <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
@@ -66,21 +130,20 @@ const AgentCenter: React.FC = () => {
         <p className="text-slate-500 text-sm font-medium">Mode d'exécution & gestion du risque</p>
       </div>
 
-      {/* cTrader Status */}
-      <div className={`p-4 rounded-2xl border flex items-center gap-4 ${status?.connected ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20'}`}>
-        <div className={`w-3 h-3 rounded-full ${status?.connected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+      {/* Engine Status Bar */}
+      <div className={`p-4 rounded-2xl border flex items-center gap-4 ${engineStatus?.isRunning ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20'}`}>
+        <div className={`w-3 h-3 rounded-full ${engineStatus?.isRunning ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
         <div className="flex-1">
-          <span className={`font-black text-xs uppercase ${status?.connected ? 'text-emerald-400' : 'text-rose-400'}`}>
-            cTrader {status?.connected ? 'CONNECTÉ' : 'DÉCONNECTÉ'}
+          <span className={`font-black text-xs uppercase ${engineStatus?.isRunning ? 'text-emerald-400' : 'text-rose-400'}`}>
+            Moteur {engineStatus?.isRunning ? 'EN COURS' : 'ARRÊTÉ'}
           </span>
-          {status?.connected && (
+          {engineStatus && (
             <span className="text-slate-400 text-xs ml-4">
-              Solde: <strong className="text-white">{status.balance.toFixed(2)} USD</strong>
-              &nbsp;· Positions: <strong className="text-white">{status.openPositions}</strong>
+              Signaux actifs: <strong className="text-white">{engineStatus.activeCount}</strong>
             </span>
           )}
         </div>
-        <button onClick={fetchStatus} className="text-slate-500 hover:text-white transition-colors">
+        <button onClick={fetchStatus} className={`text-slate-500 hover:text-white transition-colors ${modeLoading ? 'animate-spin' : ''}`}>
           <RefreshCw className="w-4 h-4" />
         </button>
       </div>
@@ -93,11 +156,12 @@ const AgentCenter: React.FC = () => {
             <button
               key={m.id}
               onClick={() => setMode(m.id)}
+              disabled={modeLoading}
               className={`p-5 rounded-2xl border text-left transition-all ${
                 currentMode === m.id
                   ? colorMap[m.color] + ' ring-1 ring-current'
                   : 'bg-slate-950 border-slate-800 text-slate-500 hover:border-slate-600'
-              }`}
+              } disabled:opacity-50`}
             >
               <div className="flex items-center gap-3 mb-2">
                 {m.icon}
@@ -115,10 +179,10 @@ const AgentCenter: React.FC = () => {
         <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-6">Limites de Risque</h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-6">
           {([
-            { key: 'maxSimultaneousTrades', label: 'Trades Simultanés Max', suffix: '' },
-            { key: 'maxRiskPercent',        label: 'Risque Total Max',       suffix: '%' },
-            { key: 'maxDrawdownPercent',    label: 'Drawdown Max',           suffix: '%' },
-          ] as const).map(({ key, label, suffix }) => (
+            { key: 'maxSimultaneousTrades' as const, label: 'Trades Simultanés Max', suffix: '' },
+            { key: 'maxRiskPercent'        as const, label: 'Risque Total Max',       suffix: '%' },
+            { key: 'maxDrawdownPercent'    as const, label: 'Drawdown Max',           suffix: '%' },
+          ]).map(({ key, label, suffix }) => (
             <div key={key}>
               <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">{label}</label>
               <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
@@ -137,7 +201,7 @@ const AgentCenter: React.FC = () => {
         <button
           onClick={saveLimits}
           disabled={saving}
-          className="flex items-center gap-2 px-6 py-3 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-black text-xs transition-all shadow-lg active:scale-95"
+          className="flex items-center gap-2 px-6 py-3 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-black text-xs transition-all shadow-lg active:scale-95 disabled:opacity-50"
         >
           <Save className="w-4 h-4" />
           {saving ? 'SAUVEGARDE...' : 'SAUVEGARDER LIMITES'}
