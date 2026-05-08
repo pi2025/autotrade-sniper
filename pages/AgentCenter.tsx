@@ -24,9 +24,12 @@ const AgentCenter: React.FC = () => {
   const fetchStatus = async () => {
     try {
       const res = await fetch('/api/agent/status');
+      if (!res.ok) return;
+      const contentType = res.headers.get('content-type');
+      if (!contentType?.includes('application/json')) return;
       const data = await res.json();
       setStatus(data);
-      setLimits(data.limits);
+      if (data.limits) setLimits(data.limits);
     } catch {}
   };
 
