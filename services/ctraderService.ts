@@ -263,11 +263,9 @@ function calculateVolume(signal: Signal, balance: number): number {
     // cTrader indices : volume en centièmes (100 = 1 contrat)
     rawVolume = (riskAmount / slDistance) * 100;
   } else if (isCrypto) {
-    // Crypto : volume en satoshis/wei — 1 unité = 100000000 (BTC) ou 100000000 (ETH)
-    // cTrader crypto volume = unités × 100000000
-    // PnL = volume_lots * slDistance, volume_lots = riskAmount / slDistance
-    rawVolume = riskAmount / slDistance;
-    rawVolume = rawVolume * 100000000; // En unités cTrader crypto
+    // Sécurité: le multiplicateur crypto dépend des specs broker cTrader.
+    // L'exécution crypto est bloquée dans placeOrder tant que ces specs ne sont pas validées.
+    return 0;
   } else if (isUsdBase) {
     rawVolume = (riskAmount * signal.priceAtSignal) / slDistance;
   } else {
@@ -386,6 +384,13 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
     return { success: false, error: `Connexion cTrader échouée: ${err.message}` };
   }
 
+  if (signal.assetType !== AssetType.FOREX) {
+    return {
+      success: false,
+      error: `Exécution cTrader bloquée pour ${signal.asset}: seuls les signaux FOREX sont autorisés tant que les tailles crypto/indices/commodités ne sont pas validées par symbole.`,
+    };
+  }
+
   const symbolId = resolveSymbolId(signal.asset);
   if (!symbolId) {
     return { success: false, error: `Symbole non supporté sur cTrader: ${signal.asset}` };
@@ -415,10 +420,20 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
       takeProfit: priceToDouble(signal.tradeSetup.takeProfit),
     });
 
-    // L'API retourne un ProtoOAExecutionEvent avec la position ouverte
+    // L'API retourne un ProtoOAExecutionEvent avec la position ouverte.
+    // Si aucune position/order ID n'est présent, on ne marque surtout pas l'ordre comme exécuté.
     const positionId = res.position?.positionId
-      ?? res.order?.orderId
-      ?? 'unknown';
+      ?? res.order?.orderId;
+
+    if (!positionId) {
+      console.error('❌ cTrader order response without positionId/orderId:', JSON.stringify(res));
+      return {
+        success: false,
+        error: `cTrader n'a pas confirmé de position pour ${ctraderName}. Ordre non marqué comme exécuté. Volume tenté: ${volume}.`,
+        instrument: ctraderName,
+        units: volume,
+      };
+    }
 
     console.log(`✅ cTrader Order placed: ${ctraderName} ${tradeSide === TRADE_SIDE.BUY ? 'BUY' : 'SELL'} vol=${volume} — positionId: ${positionId}`);
 
