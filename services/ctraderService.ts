@@ -1,4 +1,4 @@
-import net from 'net';
+import tls from 'tls';
 import protobuf from 'protobufjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -22,6 +22,14 @@ const PT = {
   TRADER_REQ:    2121,
   TRADER_RES:    2122,
 } as const;
+
+const RESPONSE_MESSAGE_TYPES: Partial<Record<number, string>> = {
+  [PT.APP_AUTH_RES]: 'ProtoOAApplicationAuthRes',
+  [PT.ACC_AUTH_RES]: 'ProtoOAAccountAuthRes',
+  [PT.EXECUTION_EVT]: 'ProtoOAExecutionEvent',
+  [PT.RECONCILE_RES]: 'ProtoOAReconcileRes',
+  [PT.TRADER_RES]: 'ProtoOATraderRes',
+};
 
 // --- Mapping Yahoo Finance → cTrader symbolName ---
 const SYMBOL_MAP: Record<string, string> = {
@@ -51,7 +59,7 @@ export interface AccountInfo {
 }
 
 class CTraderService {
-  private socket: net.Socket | null = null;
+  private socket: tls.TLSSocket | null = null;
   private proto: protobuf.Root | null = null;
   private buffer = Buffer.alloc(0);
   private pendingCallbacks = new Map<string, (msg: any) => void>();
@@ -79,11 +87,11 @@ class CTraderService {
     return new Promise((resolve, reject) => {
       this.buffer = Buffer.alloc(0);
 
-      // Port 5035 = TCP plain (demo), port 5036 = TCP+TLS (live)
-      this.socket = net.createConnection({ host: this.tlsHost, port: 5035 });
+      // Port 5036 = TLS (both demo and live)
+      this.socket = tls.connect({ host: this.tlsHost, port: 5036, rejectUnauthorized: false });
 
-      this.socket.on('connect', async () => {
-        console.log(`✅ cTrader TCP connecté à ${this.tlsHost}:5035`);
+      this.socket.on('secureConnect', async () => {
+        console.log(`✅ cTrader TLS connecté à ${this.tlsHost}:5036`);
         this.reconnectDelay = 1000;
         try {
           await this.applicationAuth();
@@ -97,6 +105,7 @@ class CTraderService {
       });
 
       this.socket.on('data', (chunk: Buffer) => {
+        console.log(`📥 cTrader raw data (${chunk.length}B): ${chunk.slice(0, 32).toString('hex')}`);
         this.buffer = Buffer.concat([this.buffer, chunk]);
         this.processBuffer();
       });
@@ -133,7 +142,16 @@ class CTraderService {
     if (!this.proto) return;
     try {
       const ProtoMessage = this.proto.lookupType('ProtoMessage');
-      const msg: any = ProtoMessage.decode(payload);
+      const outerMsg: any = ProtoMessage.decode(payload);
+      const messageType = RESPONSE_MESSAGE_TYPES[outerMsg.payloadType];
+      const innerMsg = messageType && outerMsg.payload
+        ? this.proto.lookupType(messageType).decode(outerMsg.payload)
+        : {};
+      const msg: any = {
+        ...(innerMsg as object),
+        payloadType: outerMsg.payloadType,
+        clientMsgId: outerMsg.clientMsgId,
+      };
 
       console.log(`📨 cTrader ← payloadType=${msg.payloadType} clientMsgId=${msg.clientMsgId ?? '—'}`);
 
@@ -141,7 +159,6 @@ class CTraderService {
       if (clientMsgId && this.pendingCallbacks.has(clientMsgId)) {
         const cb = this.pendingCallbacks.get(clientMsgId)!;
         this.pendingCallbacks.delete(clientMsgId);
-        if (msg.payloadType) this.pendingByPayloadType.delete(msg.payloadType - 1);
         cb(msg);
         return;
       }
@@ -175,7 +192,8 @@ class CTraderService {
     const outerBytes = ProtoMessage.encode(outerMsg).finish();
     const buf = Buffer.allocUnsafe(4 + outerBytes.length);
     buf.writeUInt32BE(outerBytes.length, 0);
-    outerBytes.copy(buf, 4);
+    Buffer.from(outerBytes).copy(buf, 4);
+    console.log(`📤 cTrader → payloadType=${payloadType} len=${outerBytes.length} hex=${buf.slice(0, 32).toString('hex')}`);
     this.socket.write(buf);
   }
 
