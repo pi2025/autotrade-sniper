@@ -1,5 +1,6 @@
 import tls from 'tls';
-import { Signal, SignalType, AssetType } from '../types.ts';
+import { Signal, SignalType, AssetType, AgentPositionSizing } from '../types.ts';
+import { DEFAULT_POSITION_SIZING } from './agentController.ts';
 
 const PT = {
   HEARTBEAT: 51,
@@ -278,9 +279,35 @@ class CTraderService {
     }, 10000);
   }
 
-  private calculateVolume(signal: Signal, balance: number, symbolName: string): number {
-    const riskMultiplier = symbolName === 'EURUSD' ? 0.5 : 1;
-    const riskAmount = balance * (0.01 * riskMultiplier);
+  private getAssetMultiplier(signal: Signal, sizing: AgentPositionSizing): number {
+    if (signal.assetType === AssetType.FOREX) return sizing.forexMultiplier;
+    if (signal.assetType === AssetType.CRYPTO) return sizing.cryptoMultiplier;
+    if (signal.assetType === AssetType.COMMODITY) return sizing.commodityMultiplier;
+    if (signal.assetType === AssetType.INDEX) return sizing.indexMultiplier;
+    if (signal.assetType === AssetType.STOCK) return sizing.stockMultiplier;
+    return 1;
+  }
+
+  private calculateRiskAmount(signal: Signal, balance: number, sizing: AgentPositionSizing): number {
+    const multiplier = Math.max(0, sizing.multiplier) * Math.max(0, this.getAssetMultiplier(signal, sizing));
+    if (sizing.mode === 'FIXED_AMOUNT') return Math.max(0, sizing.fixedAmount) * multiplier;
+    if (sizing.mode === 'FIXED_LOT') return 0;
+    return balance * (Math.max(0, sizing.riskPercent) / 100) * multiplier;
+  }
+
+  private calculateVolume(signal: Signal, balance: number, symbolName: string, rawSizing?: Partial<AgentPositionSizing>): number {
+    const sizing: AgentPositionSizing = { ...DEFAULT_POSITION_SIZING, ...(rawSizing ?? {}) };
+
+    if (sizing.mode === 'FIXED_LOT') {
+      const lots = Math.max(0, sizing.fixedLot)
+        * Math.max(0, sizing.multiplier)
+        * Math.max(0, this.getAssetMultiplier(signal, sizing));
+      const units = lots * 100000;
+      const boundedUnits = Math.max(sizing.minVolumeUnits, Math.min(units, sizing.maxVolumeUnits));
+      return Math.round(boundedUnits * 100);
+    }
+
+    const riskAmount = this.calculateRiskAmount(signal, balance, sizing);
     const slDistance = Math.abs(signal.priceAtSignal - signal.tradeSetup.stopLoss);
     if (slDistance === 0) return 0;
 
@@ -291,17 +318,11 @@ class CTraderService {
       baseUnits = riskAmount / slDistance;
     }
 
-    const isDiscrete = signal.assetType === AssetType.INDEX
-      || signal.assetType === AssetType.COMMODITY
-      || signal.assetType === AssetType.STOCK;
-
-    if (isDiscrete) return Math.max(1, Math.floor(baseUnits));
-
-    const volumeInCents = Math.round(baseUnits * 100);
-    return Math.max(1000, Math.min(volumeInCents, 10_000_000));
+    const boundedUnits = Math.max(sizing.minVolumeUnits, Math.min(baseUnits, sizing.maxVolumeUnits));
+    return Math.round(boundedUnits * 100);
   }
 
-  async placeOrder(signal: Signal, balance: number): Promise<OrderResult> {
+  async placeOrder(signal: Signal, balance: number, positionSizing?: Partial<AgentPositionSizing>): Promise<OrderResult> {
     if (!this.authenticated) return { error: 'cTrader non authentifié' };
 
     const symbolName = SYMBOL_MAP[signal.asset];
@@ -310,7 +331,7 @@ class CTraderService {
     const symbolId = this.symbolIds.get(symbolName);
     if (!symbolId) return { error: `SymbolId introuvable pour ${symbolName}` };
 
-    const volume = this.calculateVolume(signal, balance, symbolName);
+    const volume = this.calculateVolume(signal, balance, symbolName, positionSizing);
     if (volume === 0) return { error: 'Volume calculé à 0' };
 
     const msgId = `order_${Date.now()}`;

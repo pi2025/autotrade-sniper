@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Eye, RefreshCw, Save, Shield, Zap } from 'lucide-react';
-import type { AgentLimits, AgentMode, AgentStatus } from '../types';
+import type { AgentLimits, AgentMode, AgentPositionSizing, AgentStatus } from '../types';
 
 type LegacyMode = 'signals' | 'semi-auto' | 'autonomous';
 
@@ -47,7 +47,30 @@ const DEFAULT_LIMITS: AgentLimits = {
   maxSimultaneousTrades: 3,
   maxRiskPercent: 5,
   maxDrawdownPercent: 15,
+  positionSizing: {
+    mode: 'RISK_PERCENT',
+    riskPercent: 1,
+    fixedAmount: 10,
+    fixedLot: 0.01,
+    multiplier: 1,
+    forexMultiplier: 1,
+    cryptoMultiplier: 0.25,
+    commodityMultiplier: 0.25,
+    indexMultiplier: 0.25,
+    stockMultiplier: 0.1,
+    minVolumeUnits: 1,
+    maxVolumeUnits: 100000,
+  },
 };
+
+const normalizeLimits = (raw?: Partial<AgentLimits>): AgentLimits => ({
+  ...DEFAULT_LIMITS,
+  ...(raw ?? {}),
+  positionSizing: {
+    ...DEFAULT_LIMITS.positionSizing,
+    ...(raw?.positionSizing ?? {}),
+  },
+});
 
 const AgentCenter: React.FC = () => {
   const [status, setStatus] = useState<AgentStatus | null>(null);
@@ -71,21 +94,21 @@ const AgentCenter: React.FC = () => {
           setApiMode('legacy');
           setStatus({
             mode: LEGACY_TO_UI[data.agentMode] ?? 'SIGNALS_ONLY',
-            limits: {
+            limits: normalizeLimits({
               maxSimultaneousTrades: data.riskLimits?.maxConcurrentTrades ?? DEFAULT_LIMITS.maxSimultaneousTrades,
               maxRiskPercent: data.riskLimits?.maxTotalRiskPercent ?? DEFAULT_LIMITS.maxRiskPercent,
               maxDrawdownPercent: data.riskLimits?.maxDrawdownPercent ?? DEFAULT_LIMITS.maxDrawdownPercent,
-            },
+            }),
             connected: false,
             balance: 0,
             equity: 0,
             openPositions: data.activeCount ?? 0,
           });
-          setLimits({
+          setLimits(normalizeLimits({
             maxSimultaneousTrades: data.riskLimits?.maxConcurrentTrades ?? DEFAULT_LIMITS.maxSimultaneousTrades,
             maxRiskPercent: data.riskLimits?.maxTotalRiskPercent ?? DEFAULT_LIMITS.maxRiskPercent,
             maxDrawdownPercent: data.riskLimits?.maxDrawdownPercent ?? DEFAULT_LIMITS.maxDrawdownPercent,
-          });
+          }));
           return;
         }
       }
@@ -95,7 +118,7 @@ const AgentCenter: React.FC = () => {
         const data: AgentStatus = await agentRes.json();
         setApiMode('agent');
         setStatus(data);
-        setLimits(data.limits ?? DEFAULT_LIMITS);
+        setLimits(normalizeLimits(data.limits));
       }
     } catch {}
   };
@@ -156,6 +179,16 @@ const AgentCenter: React.FC = () => {
       setError(event.message ?? 'Sauvegarde refusee par le serveur');
     }
     setSaving(false);
+  };
+
+  const updateSizing = <K extends keyof AgentPositionSizing>(key: K, value: AgentPositionSizing[K]) => {
+    setLimits((prev) => ({
+      ...prev,
+      positionSizing: {
+        ...prev.positionSizing,
+        [key]: value,
+      },
+    }));
   };
 
   const currentMode = status?.mode ?? 'SIGNALS_ONLY';
@@ -248,6 +281,79 @@ const AgentCenter: React.FC = () => {
         >
           <Save className="w-4 h-4" />
           {saving ? 'SAUVEGARDE...' : 'SAUVEGARDER LIMITES'}
+        </button>
+      </section>
+
+      <section className="bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-xl">
+        <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-6">Taille de Position</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-6">
+          <div>
+            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Mode</label>
+            <select
+              value={limits.positionSizing.mode}
+              onChange={(event) => updateSizing('mode', event.target.value as AgentPositionSizing['mode'])}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl py-3 px-4 text-white text-sm font-bold focus:outline-none focus:border-cyan-500"
+            >
+              <option value="RISK_PERCENT">Risque % solde</option>
+              <option value="FIXED_AMOUNT">Montant fixe</option>
+              <option value="FIXED_LOT">Lot fixe</option>
+            </select>
+          </div>
+          {([
+            { key: 'riskPercent' as const, label: 'Risque par trade', suffix: '%' },
+            { key: 'fixedAmount' as const, label: 'Montant fixe', suffix: '' },
+            { key: 'fixedLot' as const, label: 'Lot fixe', suffix: 'lot' },
+            { key: 'multiplier' as const, label: 'Multiplicateur global', suffix: 'x' },
+            { key: 'minVolumeUnits' as const, label: 'Volume min', suffix: 'u' },
+            { key: 'maxVolumeUnits' as const, label: 'Volume max', suffix: 'u' },
+          ]).map(({ key, label, suffix }) => (
+            <div key={key}>
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">{label}</label>
+              <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                <input
+                  type="number"
+                  value={limits.positionSizing[key]}
+                  onChange={(event) => updateSizing(key, parseFloat(event.target.value) || 0)}
+                  className="flex-1 min-w-0 bg-transparent py-3 px-4 text-white text-lg font-mono font-bold focus:outline-none"
+                  min={0}
+                  step={key === 'fixedLot' || key === 'multiplier' ? 0.01 : 1}
+                />
+                {suffix && <span className="pr-4 text-slate-500 font-bold text-xs">{suffix}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 mb-6">
+          {([
+            { key: 'forexMultiplier' as const, label: 'Forex' },
+            { key: 'cryptoMultiplier' as const, label: 'Crypto' },
+            { key: 'commodityMultiplier' as const, label: 'Matieres' },
+            { key: 'indexMultiplier' as const, label: 'Indices' },
+            { key: 'stockMultiplier' as const, label: 'Actions' },
+          ]).map(({ key, label }) => (
+            <div key={key}>
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">{label}</label>
+              <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+                <input
+                  type="number"
+                  value={limits.positionSizing[key]}
+                  onChange={(event) => updateSizing(key, parseFloat(event.target.value) || 0)}
+                  className="flex-1 min-w-0 bg-transparent py-3 px-4 text-white text-lg font-mono font-bold focus:outline-none"
+                  min={0}
+                  step={0.01}
+                />
+                <span className="pr-3 text-slate-500 font-bold text-xs">x</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button
+          onClick={saveLimits}
+          disabled={saving}
+          className="flex items-center gap-2 px-6 py-3 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl font-black text-xs transition-all shadow-lg active:scale-95 disabled:opacity-50"
+        >
+          <Save className="w-4 h-4" />
+          {saving ? 'SAUVEGARDE...' : 'SAUVEGARDER TAILLE'}
         </button>
       </section>
     </div>

@@ -21,10 +21,28 @@ export enum SignalStatus {
 
 export type AgentMode = 'SIGNALS_ONLY' | 'SEMI_AUTO' | 'AUTONOMOUS' | 'EMERGENCY_STOP';
 
+export type AgentPositionSizingMode = 'RISK_PERCENT' | 'FIXED_AMOUNT' | 'FIXED_LOT';
+
+export interface AgentPositionSizing {
+  mode: AgentPositionSizingMode;
+  riskPercent: number;
+  fixedAmount: number;
+  fixedLot: number;
+  multiplier: number;
+  forexMultiplier: number;
+  cryptoMultiplier: number;
+  commodityMultiplier: number;
+  indexMultiplier: number;
+  stockMultiplier: number;
+  minVolumeUnits: number;
+  maxVolumeUnits: number;
+}
+
 export interface AgentLimits {
   maxSimultaneousTrades: number;
   maxRiskPercent: number;
   maxDrawdownPercent: number;
+  positionSizing: AgentPositionSizing;
 }
 
 export interface AgentStatus {

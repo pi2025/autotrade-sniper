@@ -1,5 +1,4 @@
-import { Signal, AgentMode, AgentLimits } from '../types.ts';
-import { ctraderService } from './ctraderService.ts';
+import { Signal, AgentMode, AgentLimits, AgentPositionSizing } from '../types.ts';
 
 export interface ExecutionDecision {
   execute: boolean;
@@ -7,10 +6,26 @@ export interface ExecutionDecision {
   reason?: string;
 }
 
+export const DEFAULT_POSITION_SIZING: AgentPositionSizing = {
+  mode: 'RISK_PERCENT',
+  riskPercent: 1,
+  fixedAmount: 10,
+  fixedLot: 0.01,
+  multiplier: 1,
+  forexMultiplier: 1,
+  cryptoMultiplier: 0.25,
+  commodityMultiplier: 0.25,
+  indexMultiplier: 0.25,
+  stockMultiplier: 0.1,
+  minVolumeUnits: 1,
+  maxVolumeUnits: 100000,
+};
+
 const DEFAULT_LIMITS: AgentLimits = {
   maxSimultaneousTrades: 3,
   maxRiskPercent: 5,
   maxDrawdownPercent: 15,
+  positionSizing: { ...DEFAULT_POSITION_SIZING },
 };
 
 class AgentController {
@@ -31,7 +46,7 @@ class AgentController {
 
       for (const row of data ?? []) {
         if (row.key === 'agent_mode') this.mode = row.value as AgentMode;
-        if (row.key === 'agent_limits') this.limits = { ...DEFAULT_LIMITS, ...row.value };
+        if (row.key === 'agent_limits') this.limits = this.normalizeLimits(row.value);
       }
       console.log(`🤖 AgentController initialisé — mode: ${this.mode}`);
     } catch (e) {
@@ -46,12 +61,13 @@ class AgentController {
   }
 
   async setLimits(limits: Partial<AgentLimits>): Promise<void> {
-    this.limits = { ...this.limits, ...limits };
+    this.limits = this.normalizeLimits({ ...this.limits, ...limits });
     await this.persist('agent_limits', this.limits);
   }
 
   getMode(): AgentMode { return this.mode; }
   getLimits(): AgentLimits { return { ...this.limits }; }
+  getPositionSizing(): AgentPositionSizing { return { ...this.limits.positionSizing }; }
 
   shouldExecute(signal: Signal, activeSignals: Signal[]): ExecutionDecision {
     if (this.mode === 'EMERGENCY_STOP') {
@@ -92,6 +108,17 @@ class AgentController {
     } catch (e) {
       console.warn('AgentController: persist échoué', e);
     }
+  }
+
+  private normalizeLimits(raw: Partial<AgentLimits> | null | undefined): AgentLimits {
+    return {
+      ...DEFAULT_LIMITS,
+      ...(raw ?? {}),
+      positionSizing: {
+        ...DEFAULT_POSITION_SIZING,
+        ...(raw?.positionSizing ?? {}),
+      },
+    };
   }
 }
 

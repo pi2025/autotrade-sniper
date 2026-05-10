@@ -120,7 +120,7 @@ async function executeSignalById(idOrPrefix: string): Promise<OrderResult & { si
     }
 
     const accountInfo = await ctraderService.getAccountInfo();
-    const result = await ctraderService.placeOrder(signal, accountInfo.balance);
+    const result = await ctraderService.placeOrder(signal, accountInfo.balance, agentController.getPositionSizing());
     if (result.positionId) {
       signal.ctraderPositionId = result.positionId;
       if (supabase) await supabase.from('signals').update({ content: signal }).eq('id', signal.id);
@@ -372,7 +372,7 @@ async function runBackgroundMonitor() {
 
                 if (decision.execute) {
                   const accountInfo = await ctraderService.getAccountInfo();
-                  const result = await ctraderService.placeOrder(newSignal, accountInfo.balance);
+                  const result = await ctraderService.placeOrder(newSignal, accountInfo.balance, agentController.getPositionSizing());
                   if (result.positionId) {
                     newSignal.ctraderPositionId = result.positionId;
                     if (supabase) await supabase.from('signals').update({ content: newSignal }).eq('id', newSignal.id);
@@ -569,8 +569,8 @@ async function startServer() {
   });
 
   apiRouter.post("/agent/limits", async (req, res) => {
-    const { maxSimultaneousTrades, maxRiskPercent, maxDrawdownPercent } = req.body;
-    await agentController.setLimits({ maxSimultaneousTrades, maxRiskPercent, maxDrawdownPercent });
+    const { maxSimultaneousTrades, maxRiskPercent, maxDrawdownPercent, positionSizing } = req.body;
+    await agentController.setLimits({ maxSimultaneousTrades, maxRiskPercent, maxDrawdownPercent, positionSizing });
     res.json({ success: true, limits: agentController.getLimits() });
   });
 
