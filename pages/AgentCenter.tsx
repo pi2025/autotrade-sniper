@@ -2,6 +2,31 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Eye, RefreshCw, Save, Shield, Zap } from 'lucide-react';
 import type { AgentLimits, AgentMode, AgentStatus } from '../types';
 
+type LegacyMode = 'signals' | 'semi-auto' | 'autonomous';
+
+interface LegacyEngineStatus {
+  isRunning: boolean;
+  agentMode?: LegacyMode;
+  riskLimits?: {
+    maxConcurrentTrades?: number;
+    maxTotalRiskPercent?: number;
+    maxDrawdownPercent?: number;
+  };
+  activeCount?: number;
+}
+
+const UI_TO_LEGACY: Record<Exclude<AgentMode, 'EMERGENCY_STOP'>, LegacyMode> = {
+  SIGNALS_ONLY: 'signals',
+  SEMI_AUTO: 'semi-auto',
+  AUTONOMOUS: 'autonomous',
+};
+
+const LEGACY_TO_UI: Record<string, AgentMode> = {
+  signals: 'SIGNALS_ONLY',
+  'semi-auto': 'SEMI_AUTO',
+  autonomous: 'AUTONOMOUS',
+};
+
 const MODES: { id: AgentMode; label: string; desc: string; color: string; icon: React.ReactNode }[] = [
   { id: 'SIGNALS_ONLY', label: 'SIGNAUX SEULS', desc: 'Detection uniquement, aucune execution', color: 'slate', icon: <Eye className="w-5 h-5" /> },
   { id: 'SEMI_AUTO', label: 'SEMI-AUTO', desc: 'Validation manuelle via Telegram', color: 'amber', icon: <Zap className="w-5 h-5" /> },
@@ -27,26 +52,50 @@ const DEFAULT_LIMITS: AgentLimits = {
 const AgentCenter: React.FC = () => {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [engineRunning, setEngineRunning] = useState(false);
+  const [activeCount, setActiveCount] = useState(0);
   const [limits, setLimits] = useState<AgentLimits>(DEFAULT_LIMITS);
   const [saving, setSaving] = useState(false);
   const [modeLoading, setModeLoading] = useState(false);
+  const [apiMode, setApiMode] = useState<'agent' | 'legacy'>('agent');
+  const [error, setError] = useState<string | null>(null);
 
   const fetchStatus = async () => {
     try {
-      const [agentRes, engineRes] = await Promise.all([
-        fetch('/api/agent/status'),
-        fetch('/api/engine/status'),
-      ]);
+      const engineRes = await fetch('/api/engine/status');
+      if (engineRes.ok) {
+        const data: LegacyEngineStatus = await engineRes.json();
+        setEngineRunning(Boolean(data.isRunning));
+        setActiveCount(data.activeCount ?? 0);
 
-      if (agentRes.ok) {
-        const data: AgentStatus = await agentRes.json();
-        setStatus(data);
-        setLimits(data.limits);
+        if (data.agentMode) {
+          setApiMode('legacy');
+          setStatus({
+            mode: LEGACY_TO_UI[data.agentMode] ?? 'SIGNALS_ONLY',
+            limits: {
+              maxSimultaneousTrades: data.riskLimits?.maxConcurrentTrades ?? DEFAULT_LIMITS.maxSimultaneousTrades,
+              maxRiskPercent: data.riskLimits?.maxTotalRiskPercent ?? DEFAULT_LIMITS.maxRiskPercent,
+              maxDrawdownPercent: data.riskLimits?.maxDrawdownPercent ?? DEFAULT_LIMITS.maxDrawdownPercent,
+            },
+            connected: false,
+            balance: 0,
+            equity: 0,
+            openPositions: data.activeCount ?? 0,
+          });
+          setLimits({
+            maxSimultaneousTrades: data.riskLimits?.maxConcurrentTrades ?? DEFAULT_LIMITS.maxSimultaneousTrades,
+            maxRiskPercent: data.riskLimits?.maxTotalRiskPercent ?? DEFAULT_LIMITS.maxRiskPercent,
+            maxDrawdownPercent: data.riskLimits?.maxDrawdownPercent ?? DEFAULT_LIMITS.maxDrawdownPercent,
+          });
+          return;
+        }
       }
 
-      if (engineRes.ok) {
-        const data = await engineRes.json();
-        setEngineRunning(Boolean(data.isRunning));
+      const agentRes = await fetch('/api/agent/status');
+      if (agentRes.ok) {
+        const data: AgentStatus = await agentRes.json();
+        setApiMode('agent');
+        setStatus(data);
+        setLimits(data.limits ?? DEFAULT_LIMITS);
       }
     } catch {}
   };
@@ -62,30 +111,50 @@ const AgentCenter: React.FC = () => {
     if (mode === 'EMERGENCY_STOP' && !confirm("ARRET D'URGENCE : fermer toutes les positions et arreter le moteur ?")) return;
 
     setModeLoading(true);
+    setError(null);
     try {
-      const endpoint = mode === 'EMERGENCY_STOP' ? '/api/agent/emergency-stop' : '/api/agent/mode';
-      const body = mode === 'EMERGENCY_STOP' ? {} : { mode };
+      const endpoint = apiMode === 'legacy'
+        ? mode === 'EMERGENCY_STOP' ? '/api/agent/emergency-stop' : '/api/engine/mode'
+        : mode === 'EMERGENCY_STOP' ? '/api/agent/emergency-stop' : '/api/agent/mode';
+      const body = apiMode === 'legacy' && mode !== 'EMERGENCY_STOP'
+        ? { mode: UI_TO_LEGACY[mode] }
+        : mode === 'EMERGENCY_STOP' ? {} : { mode };
 
-      await fetch(endpoint, {
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: AUTH() },
         body: JSON.stringify(body),
       });
+      if (!response.ok) throw new Error(`Changement refuse par le serveur (${response.status})`);
       await fetchStatus();
-    } catch {}
+    } catch (event: any) {
+      setError(event.message ?? 'Changement refuse par le serveur');
+    }
     setModeLoading(false);
   };
 
   const saveLimits = async () => {
     setSaving(true);
+    setError(null);
     try {
-      await fetch('/api/agent/limits', {
+      const endpoint = apiMode === 'legacy' ? '/api/engine/risk' : '/api/agent/limits';
+      const body = apiMode === 'legacy'
+        ? {
+            maxConcurrentTrades: limits.maxSimultaneousTrades,
+            maxTotalRiskPercent: limits.maxRiskPercent,
+            maxDrawdownPercent: limits.maxDrawdownPercent,
+          }
+        : limits;
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: AUTH() },
-        body: JSON.stringify(limits),
+        body: JSON.stringify(body),
       });
+      if (!response.ok) throw new Error(`Sauvegarde refusee par le serveur (${response.status})`);
       await fetchStatus();
-    } catch {}
+    } catch (event: any) {
+      setError(event.message ?? 'Sauvegarde refusee par le serveur');
+    }
     setSaving(false);
   };
 
@@ -108,7 +177,7 @@ const AgentCenter: React.FC = () => {
           {status && (
             <span className="text-slate-400 text-xs ml-4">
               cTrader: <strong className={isConnected ? 'text-emerald-400' : 'text-rose-400'}>{isConnected ? 'connecte' : 'deconnecte'}</strong>
-              &nbsp;· Positions: <strong className="text-white">{status.openPositions}</strong>
+              &nbsp;· Signaux: <strong className="text-white">{activeCount || status.openPositions}</strong>
               &nbsp;· Solde: <strong className="text-white">{status.balance.toFixed(2)}</strong>
             </span>
           )}
@@ -117,6 +186,12 @@ const AgentCenter: React.FC = () => {
           <RefreshCw className="w-4 h-4" />
         </button>
       </div>
+
+      {error && (
+        <div className="p-4 rounded-2xl border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs font-bold">
+          {error}
+        </div>
+      )}
 
       <section className="bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-xl">
         <h2 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-6">Mode d'execution</h2>
