@@ -11,6 +11,7 @@ import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, S
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
 import type { AgentMode } from "./types.ts";
 import { ctraderService } from "./services/ctraderService.ts";
+import type { OrderResult } from "./services/ctraderService.ts";
 import { agentController } from "./services/agentController.ts";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -63,7 +64,7 @@ const marketCache = new Map<string, { data: any, expiry: number }>();
 const CACHE_DURATION = 60 * 1000;
 
 // --- HELPERS ---
-async function sendTelegramMessage(text: string) {
+async function sendTelegramMessage(text: string, replyMarkup?: any) {
   if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
     console.warn("⚠️ Telegram not configured. Skipping message.");
     return;
@@ -76,12 +77,57 @@ async function sendTelegramMessage(text: string) {
       body: JSON.stringify({
         chat_id: TELEGRAM_CHAT_ID,
         text: text,
-        parse_mode: 'Markdown'
+        parse_mode: 'Markdown',
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {})
       })
     });
     if (!response.ok) console.error("Telegram Error:", await response.text());
   } catch (error) {
     console.error("Failed to send Telegram message:", error);
+  }
+}
+
+async function answerTelegramCallback(callbackQueryId: string, text: string, showAlert = false) {
+  if (!TELEGRAM_TOKEN) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        callback_query_id: callbackQueryId,
+        text,
+        show_alert: showAlert,
+      }),
+    });
+  } catch (error) {
+    console.error("Failed to answer Telegram callback:", error);
+  }
+}
+
+function findActiveSignalById(idOrPrefix: string): Signal | undefined {
+  return activeSignals.find(s => s.id === idOrPrefix)
+    ?? activeSignals.find(s => s.id.startsWith(idOrPrefix));
+}
+
+async function executeSignalById(idOrPrefix: string): Promise<OrderResult & { signal?: Signal }> {
+  const signal = findActiveSignalById(idOrPrefix);
+  if (!signal) return { error: 'Signal non trouvé' };
+  if (signal.ctraderPositionId) return { error: 'Déjà exécuté', positionId: signal.ctraderPositionId, signal };
+
+  try {
+    if (!ctraderService.isConnected()) {
+      await ctraderService.init();
+    }
+
+    const accountInfo = await ctraderService.getAccountInfo();
+    const result = await ctraderService.placeOrder(signal, accountInfo.balance);
+    if (result.positionId) {
+      signal.ctraderPositionId = result.positionId;
+      if (supabase) await supabase.from('signals').update({ content: signal }).eq('id', signal.id);
+    }
+    return { ...result, signal };
+  } catch (e: any) {
+    return { error: e.message ?? String(e), signal };
   }
 }
 
@@ -348,7 +394,12 @@ async function runBackgroundMonitor() {
 *Confiance:* ${newSignal.confidence}%
 
 👉 Exécuter : /execute\\_${newSignal.id.substring(0, 8)}
-                  `);
+                  `, {
+                    inline_keyboard: [[
+                      { text: '✅ Valider le trade', callback_data: `execute:${newSignal.id}` },
+                      { text: '❌ Ignorer', callback_data: `ignore:${newSignal.id}` },
+                    ]],
+                  });
                 } else {
                   await sendTelegramMessage(`
 🚀 *NOUVEAU SIGNAL SNIPER V15* 🚀
@@ -523,16 +574,61 @@ async function startServer() {
     res.json({ success: true, limits: agentController.getLimits() });
   });
 
-  apiRouter.post("/agent/execute/:id", async (req, res) => {
-    const signal = activeSignals.find(s => s.id === req.params.id);
-    if (!signal) return res.status(404).json({ error: 'Signal non trouvé' });
-    if (signal.ctraderPositionId) return res.status(400).json({ error: 'Déjà exécuté' });
-    const accountInfo = await ctraderService.getAccountInfo();
-    const result = await ctraderService.placeOrder(signal, accountInfo.balance);
-    if (result.positionId) {
-      signal.ctraderPositionId = result.positionId;
-      if (supabase) await supabase.from('signals').update({ content: signal }).eq('id', signal.id);
+  apiRouter.post("/telegram/webhook", async (req, res) => {
+    const update = req.body;
+    const message = update.message;
+    const callbackQuery = update.callback_query;
+    const chatId = message?.chat?.id?.toString() ?? callbackQuery?.message?.chat?.id?.toString();
+
+    if (TELEGRAM_CHAT_ID && chatId && chatId !== TELEGRAM_CHAT_ID.toString()) {
+      return res.json({ ok: true, ignored: true });
     }
+
+    try {
+      if (callbackQuery?.data) {
+        const [action, signalId] = callbackQuery.data.split(':');
+
+        if (action === 'ignore') {
+          await answerTelegramCallback(callbackQuery.id, 'Signal ignoré.');
+          return res.json({ ok: true });
+        }
+
+        if (action === 'execute' && signalId) {
+          await answerTelegramCallback(callbackQuery.id, 'Validation reçue, exécution en cours...');
+          const result = await executeSignalById(signalId);
+          if (result.positionId) {
+            await sendTelegramMessage(`✅ *TRADE VALIDÉ ET EXÉCUTÉ*\n*Actif:* ${result.signal?.asset ?? signalId}\n*Position ID:* ${result.positionId}`);
+          } else {
+            await sendTelegramMessage(`❌ *VALIDATION ÉCHOUÉE*\n*Signal:* ${signalId.substring(0, 8)}\n*Erreur:* ${result.error ?? 'Erreur inconnue'}`);
+          }
+          return res.json({ ok: true, success: !result.error, ...result });
+        }
+      }
+
+      const text = message?.text as string | undefined;
+      const match = text?.match(/^\/execute[_\s-]?([a-zA-Z0-9-]{8,36})/);
+      if (match?.[1]) {
+        const result = await executeSignalById(match[1]);
+        if (result.positionId) {
+          await sendTelegramMessage(`✅ *TRADE VALIDÉ ET EXÉCUTÉ*\n*Actif:* ${result.signal?.asset ?? match[1]}\n*Position ID:* ${result.positionId}`);
+        } else {
+          await sendTelegramMessage(`❌ *VALIDATION ÉCHOUÉE*\n*Signal:* ${match[1]}\n*Erreur:* ${result.error ?? 'Erreur inconnue'}`);
+        }
+        return res.json({ ok: true, success: !result.error, ...result });
+      }
+
+      res.json({ ok: true });
+    } catch (e: any) {
+      console.error('Telegram webhook error:', e);
+      await sendTelegramMessage(`❌ *VALIDATION ÉCHOUÉE*\n*Erreur:* ${e.message ?? e}`);
+      res.json({ ok: true, error: e.message ?? String(e) });
+    }
+  });
+
+  apiRouter.post("/agent/execute/:id", async (req, res) => {
+    const result = await executeSignalById(req.params.id);
+    if (result.error === 'Signal non trouvé') return res.status(404).json({ error: result.error });
+    if (result.error === 'Déjà exécuté') return res.status(400).json({ error: result.error, positionId: result.positionId });
     res.json({ success: !result.error, ...result });
   });
 

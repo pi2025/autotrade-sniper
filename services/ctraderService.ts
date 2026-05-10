@@ -1,48 +1,38 @@
 import tls from 'tls';
-import protobuf from 'protobufjs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { Signal, SignalType, AssetType } from '../types.ts';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// --- Payload types (numéros de message Spotware) ---
 const PT = {
-  HEARTBEAT:       51,
-  APP_AUTH_REQ:  2100,
-  APP_AUTH_RES:  2101,
-  ACC_AUTH_REQ:  2102,
-  ACC_AUTH_RES:  2103,
+  HEARTBEAT: 51,
+  APP_AUTH_REQ: 2100,
+  APP_AUTH_RES: 2101,
+  ACC_AUTH_REQ: 2102,
+  ACC_AUTH_RES: 2103,
   NEW_ORDER_REQ: 2106,
-  AMEND_SL_REQ:  2109,
+  AMEND_SL_REQ: 2109,
   CLOSE_POS_REQ: 2111,
-  EXECUTION_EVT: 2126,
+  SYMBOLS_LIST_REQ: 2114,
+  SYMBOLS_LIST_RES: 2115,
+  TRADER_REQ: 2121,
+  TRADER_RES: 2122,
   RECONCILE_REQ: 2124,
   RECONCILE_RES: 2125,
-  TRADER_REQ:    2121,
-  TRADER_RES:    2122,
+  EXECUTION_EVT: 2126,
+  ERROR_RES: 2142,
+  ACCOUNT_LIST_REQ: 2149,
+  ACCOUNT_LIST_RES: 2150,
 } as const;
 
-const RESPONSE_MESSAGE_TYPES: Partial<Record<number, string>> = {
-  [PT.APP_AUTH_RES]: 'ProtoOAApplicationAuthRes',
-  [PT.ACC_AUTH_RES]: 'ProtoOAAccountAuthRes',
-  [PT.EXECUTION_EVT]: 'ProtoOAExecutionEvent',
-  [PT.RECONCILE_RES]: 'ProtoOAReconcileRes',
-  [PT.TRADER_RES]: 'ProtoOATraderRes',
-};
-
-// --- Mapping Yahoo Finance → cTrader symbolName ---
 const SYMBOL_MAP: Record<string, string> = {
-  'EURUSD=X': 'EURUSD',  'GBPUSD=X': 'GBPUSD',  'USDJPY=X': 'USDJPY',
-  'AUDUSD=X': 'AUDUSD',  'USDCAD=X': 'USDCAD',  'USDCHF=X': 'USDCHF',
-  'NZDUSD=X': 'NZDUSD',  'EURGBP=X': 'EURGBP',  'EURJPY=X': 'EURJPY',
-  'GBPJPY=X': 'GBPJPY',  'AUDJPY=X': 'AUDJPY',  'CHFJPY=X': 'CHFJPY',
-  'EURNZD=X': 'EURNZD',  'GBPAUD=X': 'GBPAUD',  'CADJPY=X': 'CADJPY',
-  'EURCHF=X': 'EURCHF',  'EURAUD=X': 'EURAUD',
-  'GC=F':     'XAUUSD',  'SI=F':     'XAGUSD',  'CL=F':    'USOIL',
-  'BTC-USD':  'BTCUSD',  'ETH-USD':  'ETHUSD',  'SOL-USD': 'SOLUSD',
-  'BNB-USD':  'BNBUSD',  'XRP-USD':  'XRPUSD',
-  '^GSPC':    'SP500',   '^IXIC':    'NAS100',  '^FCHI':   'FRA40',
+  'EURUSD=X': 'EURUSD', 'GBPUSD=X': 'GBPUSD', 'USDJPY=X': 'USDJPY',
+  'AUDUSD=X': 'AUDUSD', 'USDCAD=X': 'USDCAD', 'USDCHF=X': 'USDCHF',
+  'NZDUSD=X': 'NZDUSD', 'EURGBP=X': 'EURGBP', 'EURJPY=X': 'EURJPY',
+  'GBPJPY=X': 'GBPJPY', 'AUDJPY=X': 'AUDJPY', 'CHFJPY=X': 'CHFJPY',
+  'EURNZD=X': 'EURNZD', 'GBPAUD=X': 'GBPAUD', 'CADJPY=X': 'CADJPY',
+  'EURCHF=X': 'EURCHF', 'EURAUD=X': 'EURAUD',
+  'GC=F': 'XAUUSD', 'SI=F': 'XAGUSD', 'CL=F': 'USOIL',
+  'BTC-USD': 'BTCUSD', 'ETH-USD': 'ETHUSD', 'SOL-USD': 'SOLUSD',
+  'BNB-USD': 'BNBUSD', 'XRP-USD': 'XRPUSD',
+  '^GSPC': 'SP500', '^IXIC': 'NAS100', '^FCHI': 'FRA40',
 };
 
 const USD_BASE = new Set(['USDJPY', 'USDCAD', 'USDCHF']);
@@ -58,20 +48,26 @@ export interface AccountInfo {
   equity: number;
 }
 
+interface JsonMessage {
+  payloadType: number;
+  clientMsgId?: string;
+  payload?: any;
+}
+
 class CTraderService {
   private socket: tls.TLSSocket | null = null;
-  private proto: protobuf.Root | null = null;
-  private buffer = Buffer.alloc(0);
-  private pendingCallbacks = new Map<string, (msg: any) => void>();
-  private pendingByPayloadType = new Map<number, (msg: any) => void>();
+  private pendingCallbacks = new Map<string, (msg: JsonMessage) => void>();
+  private pendingByPayloadType = new Map<number, (msg: JsonMessage) => void>();
   private reconnectDelay = 1000;
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private authenticated = false;
+  private receiveBuffer = '';
+  private symbolIds = new Map<string, number>();
 
   private get tlsHost() {
     return process.env.CTRADER_LIVE === 'true'
       ? 'live.ctraderapi.com'
-      : 'demo.ctraderapi.com'; // port 5035 = plain TCP, port 5036 = TLS
+      : 'demo.ctraderapi.com';
   }
 
   private get accountId(): number {
@@ -79,125 +75,132 @@ class CTraderService {
   }
 
   async init(): Promise<void> {
-    this.proto = await protobuf.load(path.join(__dirname, 'ctrader.proto'));
+    if (this.authenticated && this.socket && !this.socket.destroyed) return;
     await this.connect();
   }
 
   private connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.buffer = Buffer.alloc(0);
-
-      // Port 5036 = TLS (both demo and live)
+      this.receiveBuffer = '';
       this.socket = tls.connect({ host: this.tlsHost, port: 5036, rejectUnauthorized: false });
 
+      const failOnce = (err: any) => {
+        this.socket?.removeListener('error', failOnce);
+        reject(err);
+      };
+
       this.socket.on('secureConnect', async () => {
-        console.log(`✅ cTrader TLS connecté à ${this.tlsHost}:5036`);
+        console.log(`✅ cTrader JSON/TLS connecté à ${this.tlsHost}:5036`);
         this.reconnectDelay = 1000;
+        this.socket?.removeListener('error', failOnce);
         try {
           await this.applicationAuth();
           await this.accountAuth();
+          await this.loadSymbols();
           this.startHeartbeat();
           this.authenticated = true;
           resolve();
         } catch (e) {
+          this.socket?.destroy();
           reject(e);
         }
       });
 
-      this.socket.on('data', (chunk: Buffer) => {
-        console.log(`📥 cTrader raw data (${chunk.length}B): ${chunk.slice(0, 32).toString('hex')}`);
-        this.buffer = Buffer.concat([this.buffer, chunk]);
-        this.processBuffer();
-      });
+      this.socket.on('data', (chunk: Buffer) => this.handleData(chunk.toString('utf8')));
 
       this.socket.on('close', () => {
-        console.warn('⚠️ cTrader déconnecté. Reconnexion dans', this.reconnectDelay, 'ms');
+        const shouldReconnect = this.authenticated;
         this.authenticated = false;
         if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = null;
+        if (!shouldReconnect) return;
+
+        console.warn('⚠️ cTrader déconnecté. Reconnexion dans', this.reconnectDelay, 'ms');
         setTimeout(() => {
           this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
           this.connect().catch(console.error);
         }, this.reconnectDelay);
       });
 
+      this.socket.on('error', failOnce);
       this.socket.on('error', (err) => {
         console.error('❌ cTrader socket error:', err.message);
-        reject(err);
       });
     });
   }
 
-  private processBuffer(): void {
-    while (this.buffer.length >= 4) {
-      const length = this.buffer.readUInt32BE(0);
-      if (this.buffer.length < 4 + length) break;
+  private handleData(text: string): void {
+    this.receiveBuffer += text;
 
-      const payload = this.buffer.slice(4, 4 + length);
-      this.buffer = this.buffer.slice(4 + length);
-      this.handleMessage(payload);
+    while (this.receiveBuffer.trimStart().startsWith('{')) {
+      const parsed = this.extractJsonObject(this.receiveBuffer);
+      if (!parsed) return;
+      this.receiveBuffer = parsed.rest;
+      this.handleMessage(parsed.message);
     }
   }
 
-  private handleMessage(payload: Buffer): void {
-    if (!this.proto) return;
-    try {
-      const ProtoMessage = this.proto.lookupType('ProtoMessage');
-      const outerMsg: any = ProtoMessage.decode(payload);
-      const messageType = RESPONSE_MESSAGE_TYPES[outerMsg.payloadType];
-      const innerMsg = messageType && outerMsg.payload
-        ? this.proto.lookupType(messageType).decode(outerMsg.payload)
-        : {};
-      const msg: any = {
-        ...(innerMsg as object),
-        payloadType: outerMsg.payloadType,
-        clientMsgId: outerMsg.clientMsgId,
-      };
+  private extractJsonObject(input: string): { message: JsonMessage; rest: string } | null {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    const start = input.search(/\S/);
+    if (start < 0) return null;
 
-      console.log(`📨 cTrader ← payloadType=${msg.payloadType} clientMsgId=${msg.clientMsgId ?? '—'}`);
-
-      const clientMsgId = msg.clientMsgId;
-      if (clientMsgId && this.pendingCallbacks.has(clientMsgId)) {
-        const cb = this.pendingCallbacks.get(clientMsgId)!;
-        this.pendingCallbacks.delete(clientMsgId);
-        cb(msg);
-        return;
+    for (let i = start; i < input.length; i++) {
+      const char = input[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
       }
-
-      if (this.pendingByPayloadType.has(msg.payloadType)) {
-        const cb = this.pendingByPayloadType.get(msg.payloadType)!;
-        this.pendingByPayloadType.delete(msg.payloadType);
-        cb(msg);
+      if (char === '"') inString = true;
+      else if (char === '{') depth++;
+      else if (char === '}') {
+        depth--;
+        if (depth === 0) {
+          return {
+            message: JSON.parse(input.slice(start, i + 1)),
+            rest: input.slice(i + 1),
+          };
+        }
       }
-    } catch (e) {
-      console.error('cTrader message parse error:', e);
+    }
+    return null;
+  }
+
+  private handleMessage(msg: JsonMessage): void {
+    console.log(`📨 cTrader ← payloadType=${msg.payloadType} clientMsgId=${msg.clientMsgId ?? '-'}`);
+
+    const clientMsgId = msg.clientMsgId;
+    if (clientMsgId && this.pendingCallbacks.has(clientMsgId)) {
+      const cb = this.pendingCallbacks.get(clientMsgId)!;
+      this.pendingCallbacks.delete(clientMsgId);
+      cb(msg);
+      return;
+    }
+
+    if (this.pendingByPayloadType.has(msg.payloadType)) {
+      const cb = this.pendingByPayloadType.get(msg.payloadType)!;
+      this.pendingByPayloadType.delete(msg.payloadType);
+      cb(msg);
     }
   }
 
-  private send(payloadType: number, messageType: string, fields: object, clientMsgId?: string): void {
-    if (!this.proto || !this.socket || this.socket.destroyed) return;
+  private send(payloadType: number, payload: object, clientMsgId?: string): void {
+    if (!this.socket || this.socket.destroyed) throw new Error('cTrader socket non connecté');
 
-    const InnerMsg = this.proto.lookupType(messageType);
-    const ProtoMessage = this.proto.lookupType('ProtoMessage');
-
-    const innerPayload = InnerMsg.encode(
-      InnerMsg.create({ payloadType, ...fields })
-    ).finish();
-
-    const outerMsg = ProtoMessage.create({
+    const msg = JSON.stringify({
       payloadType,
-      payload: innerPayload,
-      ...(clientMsgId ? { clientMsgId } : {})
+      ...(clientMsgId ? { clientMsgId } : {}),
+      ...(Object.keys(payload).length ? { payload } : {}),
     });
-
-    const outerBytes = ProtoMessage.encode(outerMsg).finish();
-    const buf = Buffer.allocUnsafe(4 + outerBytes.length);
-    buf.writeUInt32BE(outerBytes.length, 0);
-    Buffer.from(outerBytes).copy(buf, 4);
-    console.log(`📤 cTrader → payloadType=${payloadType} len=${outerBytes.length} hex=${buf.slice(0, 32).toString('hex')}`);
-    this.socket.write(buf);
+    console.log(`📤 cTrader → payloadType=${payloadType} clientMsgId=${clientMsgId ?? '-'}`);
+    this.socket.write(msg);
   }
 
-  private waitForResponse(clientMsgId: string, expectedPayloadType?: number, timeoutMs = 8000): Promise<any> {
+  private waitForResponse(clientMsgId: string, expectedPayloadType?: number, timeoutMs = 8000): Promise<JsonMessage> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCallbacks.delete(clientMsgId);
@@ -205,10 +208,17 @@ class CTraderService {
         reject(new Error(`cTrader timeout: ${clientMsgId}`));
       }, timeoutMs);
 
-      const handler = (msg: any) => {
+      const handler = (msg: JsonMessage) => {
         clearTimeout(timer);
         this.pendingCallbacks.delete(clientMsgId);
         if (expectedPayloadType) this.pendingByPayloadType.delete(expectedPayloadType);
+
+        if (msg.payloadType === PT.ERROR_RES) {
+          const code = msg.payload?.errorCode ?? 'UNKNOWN_ERROR';
+          const description = msg.payload?.description ? `: ${msg.payload.description}` : '';
+          reject(new Error(`${code}${description}`));
+          return;
+        }
         resolve(msg);
       };
 
@@ -220,9 +230,9 @@ class CTraderService {
   private async applicationAuth(): Promise<void> {
     const msgId = 'app_auth';
     const responsePromise = this.waitForResponse(msgId, PT.APP_AUTH_RES);
-    this.send(PT.APP_AUTH_REQ, 'ProtoOAApplicationAuthReq', {
-      clientId: process.env.CTRADER_CLIENT_ID!,
-      clientSecret: process.env.CTRADER_CLIENT_SECRET!,
+    this.send(PT.APP_AUTH_REQ, {
+      clientId: process.env.CTRADER_CLIENT_ID,
+      clientSecret: process.env.CTRADER_CLIENT_SECRET,
     }, msgId);
     await responsePromise;
     console.log('✅ cTrader Application Auth OK');
@@ -231,22 +241,45 @@ class CTraderService {
   private async accountAuth(): Promise<void> {
     const msgId = 'acc_auth';
     const responsePromise = this.waitForResponse(msgId, PT.ACC_AUTH_RES);
-    this.send(PT.ACC_AUTH_REQ, 'ProtoOAAccountAuthReq', {
-      accessToken: process.env.CTRADER_ACCESS_TOKEN!,
+    this.send(PT.ACC_AUTH_REQ, {
+      accessToken: process.env.CTRADER_ACCESS_TOKEN,
       ctidTraderAccountId: this.accountId,
     }, msgId);
     await responsePromise;
     console.log(`✅ cTrader Account Auth OK — compte ${this.accountId}`);
   }
 
+  private async loadSymbols(): Promise<void> {
+    const msgId = `symbols_${Date.now()}`;
+    const responsePromise = this.waitForResponse(msgId, PT.SYMBOLS_LIST_RES);
+    this.send(PT.SYMBOLS_LIST_REQ, {
+      ctidTraderAccountId: this.accountId,
+      includeArchivedSymbols: false,
+    }, msgId);
+
+    const res = await responsePromise;
+    const symbols = res.payload?.symbol ?? res.payload?.lightSymbol ?? [];
+    this.symbolIds.clear();
+    for (const symbol of symbols) {
+      if (symbol.symbolName && symbol.symbolId) {
+        this.symbolIds.set(symbol.symbolName, Number(symbol.symbolId));
+      }
+    }
+    console.log(`✅ cTrader symboles chargés: ${this.symbolIds.size}`);
+  }
+
   private startHeartbeat(): void {
     this.heartbeatInterval = setInterval(() => {
-      this.send(PT.HEARTBEAT, 'ProtoHeartbeatEvent', {});
+      try {
+        this.send(PT.HEARTBEAT, {});
+      } catch (e) {
+        console.error('Heartbeat cTrader échoué:', e);
+      }
     }, 10000);
   }
 
   private calculateVolume(signal: Signal, balance: number, symbolName: string): number {
-    const riskMultiplier = (symbolName === 'EURUSD') ? 0.5 : 1;
+    const riskMultiplier = symbolName === 'EURUSD' ? 0.5 : 1;
     const riskAmount = balance * (0.01 * riskMultiplier);
     const slDistance = Math.abs(signal.priceAtSignal - signal.tradeSetup.stopLoss);
     if (slDistance === 0) return 0;
@@ -262,11 +295,10 @@ class CTraderService {
       || signal.assetType === AssetType.COMMODITY
       || signal.assetType === AssetType.STOCK;
 
-    const apiVolume = isDiscrete
-      ? Math.floor(baseUnits)
-      : Math.round(baseUnits / 1000);
+    if (isDiscrete) return Math.max(1, Math.floor(baseUnits));
 
-    return Math.max(1, Math.min(apiVolume, 100));
+    const volumeInCents = Math.round(baseUnits * 100);
+    return Math.max(1000, Math.min(volumeInCents, 10_000_000));
   }
 
   async placeOrder(signal: Signal, balance: number): Promise<OrderResult> {
@@ -275,15 +307,18 @@ class CTraderService {
     const symbolName = SYMBOL_MAP[signal.asset];
     if (!symbolName) return { error: `Symbole non supporté: ${signal.asset}` };
 
+    const symbolId = this.symbolIds.get(symbolName);
+    if (!symbolId) return { error: `SymbolId introuvable pour ${symbolName}` };
+
     const volume = this.calculateVolume(signal, balance, symbolName);
     if (volume === 0) return { error: 'Volume calculé à 0' };
 
     const msgId = `order_${Date.now()}`;
     const responsePromise = this.waitForResponse(msgId, PT.EXECUTION_EVT);
 
-    this.send(PT.NEW_ORDER_REQ, 'ProtoOANewOrderReq', {
+    this.send(PT.NEW_ORDER_REQ, {
       ctidTraderAccountId: this.accountId,
-      symbolName,
+      symbolId,
       orderType: 1,
       tradeSide: signal.type === SignalType.BUY ? 1 : 2,
       volume,
@@ -293,7 +328,7 @@ class CTraderService {
 
     try {
       const res = await responsePromise;
-      const positionId = res.position?.positionId?.toString();
+      const positionId = res.payload?.position?.positionId?.toString();
       console.log(`✅ Ordre placé: ${symbolName} ${signal.type} vol=${volume} posId=${positionId}`);
       return { positionId };
     } catch (e: any) {
@@ -307,8 +342,7 @@ class CTraderService {
 
     const msgId = `amend_${positionId}_${Date.now()}`;
     const responsePromise = this.waitForResponse(msgId, PT.EXECUTION_EVT);
-
-    this.send(PT.AMEND_SL_REQ, 'ProtoOAAmendPositionSLTPReq', {
+    this.send(PT.AMEND_SL_REQ, {
       ctidTraderAccountId: this.accountId,
       positionId: parseInt(positionId, 10),
       stopLoss: newSL,
@@ -328,11 +362,10 @@ class CTraderService {
 
     const msgId = `close_${positionId}_${Date.now()}`;
     const responsePromise = this.waitForResponse(msgId, PT.EXECUTION_EVT);
-
-    this.send(PT.CLOSE_POS_REQ, 'ProtoOAClosePositionReq', {
+    this.send(PT.CLOSE_POS_REQ, {
       ctidTraderAccountId: this.accountId,
       positionId: parseInt(positionId, 10),
-      volume: volume || 100000,
+      volume: volume || 10_000_000,
     }, msgId);
 
     try {
@@ -351,18 +384,14 @@ class CTraderService {
 
     const msgId = `trader_${Date.now()}`;
     const responsePromise = this.waitForResponse(msgId, PT.TRADER_RES);
-
-    this.send(PT.TRADER_REQ, 'ProtoOATraderReq', {
-      ctidTraderAccountId: this.accountId,
-    }, msgId);
+    this.send(PT.TRADER_REQ, { ctidTraderAccountId: this.accountId }, msgId);
 
     try {
       const res = await responsePromise;
-      const divisor = Math.pow(10, res.trader?.moneyDigits ?? 2);
-      return {
-        balance: (res.trader?.balance ?? 0) / divisor,
-        equity: (res.trader?.balance ?? 0) / divisor,
-      };
+      const trader = res.payload?.trader ?? {};
+      const divisor = Math.pow(10, trader.moneyDigits ?? 2);
+      const balance = (trader.balance ?? 0) / divisor;
+      return { balance, equity: balance };
     } catch {
       return { balance: 0, equity: 0 };
     }
@@ -373,14 +402,11 @@ class CTraderService {
 
     const msgId = `reconcile_${Date.now()}`;
     const responsePromise = this.waitForResponse(msgId, PT.RECONCILE_RES);
-
-    this.send(PT.RECONCILE_REQ, 'ProtoOAReconcileReq', {
-      ctidTraderAccountId: this.accountId,
-    }, msgId);
+    this.send(PT.RECONCILE_REQ, { ctidTraderAccountId: this.accountId }, msgId);
 
     try {
       const res = await responsePromise;
-      return (res.position ?? []).map((p: any) => p.positionId?.toString()).filter(Boolean);
+      return (res.payload?.position ?? []).map((p: any) => p.positionId?.toString()).filter(Boolean);
     } catch {
       return [];
     }
