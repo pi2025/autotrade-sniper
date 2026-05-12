@@ -276,7 +276,7 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     try {
       const res = await fetch(`/api/signals/${id}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${import.meta.env.VITE_APP_PASSWORD ?? ''}` },
+        headers: { Authorization: `Bearer ${import.meta.env.VITE_APP_PASSWORD ?? ''}` },
       });
       if (res.ok) {
         dispatch({ type: 'DELETE_SIGNAL', payload: { id, asset } });
