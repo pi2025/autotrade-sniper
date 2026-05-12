@@ -249,7 +249,8 @@ async function runBackgroundMonitor() {
   // Init cTrader si mode != SIGNALS_ONLY et CTRADER_LIVE=true
   if (agentController.getMode() !== 'SIGNALS_ONLY') {
     if (process.env.CTRADER_LIVE !== 'true') {
-      console.warn("⛔ CTRADER_LIVE != 'true' — connexion cTrader ignorée au démarrage.");
+      console.warn("⛔ CTRADER_LIVE != 'true' — connexion cTrader ignorée. Mode forcé SIGNALS_ONLY.");
+      await agentController.setMode('SIGNALS_ONLY');
     } else {
       try {
         await ctraderService.init();
@@ -501,7 +502,8 @@ async function startServer() {
       return next();
     }
 
-    const auth = req.headers.authorization?.replace('Bearer ', '');
+    const rawAuth = req.headers.authorization ?? '';
+    const auth = rawAuth.startsWith('Bearer ') ? rawAuth.slice(7) : rawAuth;
     if (!auth || (auth !== secret && auth !== appPassword)) {
       return res.status(401).json({ error: "Unauthorized" });
     }
@@ -676,7 +678,7 @@ async function startServer() {
   apiRouter.post("/agent/mode", sensitiveRateLimit, requireAuth, async (req, res) => {
     const { mode } = req.body as { mode: AgentMode };
     const valid: AgentMode[] = ['SIGNALS_ONLY', 'SEMI_AUTO', 'AUTONOMOUS', 'EMERGENCY_STOP'];
-    if (!valid.includes(mode)) return res.status(400).json({ error: 'Mode invalide' });
+    if (!valid.includes(mode) || mode === 'EMERGENCY_STOP') return res.status(400).json({ error: 'Mode invalide. Utilisez /api/agent/emergency-stop pour le stop d\'urgence.' });
     if (mode !== 'SIGNALS_ONLY' && !ctraderService.isConnected()) {
       if (process.env.CTRADER_LIVE !== 'true') {
         return res.status(400).json({ error: "CTRADER_LIVE != 'true' — mode live non disponible en démo." });
