@@ -160,6 +160,7 @@ export interface Signal {
   scoreBreakdown: ScoreFactor[];
   estimatedDuration: string; 
   isBreakevenSet?: boolean;
+  originalStopLoss?: number;
   ctraderPositionId?: string;
 }
 

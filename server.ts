@@ -293,11 +293,13 @@ async function runBackgroundMonitor() {
             const chandelier = indicators.chandelierExit;
             
             // 1. Check Breakeven
+            let breakevenJustSet = false;
             if (!existing.isBreakevenSet && existing.tradeSetup.breakevenPrice) {
               const reached = isBuy ? currentPrice >= existing.tradeSetup.breakevenPrice : currentPrice <= existing.tradeSetup.breakevenPrice;
               if (reached) {
                 existing.tradeSetup.stopLoss = existing.priceAtSignal;
                 existing.isBreakevenSet = true;
+                breakevenJustSet = true;
                 if (supabase) {
                   await supabase.from('signals').update({ content: existing }).eq('id', existing.id);
                 }
@@ -309,14 +311,15 @@ async function runBackgroundMonitor() {
               }
             }
 
-            // 2. Check Sortie (TP/SL)
+            // 2. Check Sortie (TP/SL) — skip sur le même tick que l'activation du breakeven
             const target = existing.tradeSetup.takeProfit;
             const sl = existing.tradeSetup.stopLoss;
             const hitTP = isBuy ? currentPrice >= target : currentPrice <= target;
-            const hitSL = isBuy ? currentPrice <= Math.max(sl, chandelier) : currentPrice >= Math.min(sl, chandelier);
+            const hitSL = !breakevenJustSet && (isBuy ? currentPrice <= Math.max(sl, chandelier) : currentPrice >= Math.min(sl, chandelier));
 
             if (hitTP || hitSL) {
-              const initialRisk = Math.abs(existing.priceAtSignal - (existing.tradeSetup.stopLoss || sl));
+              const originalSL = existing.originalStopLoss ?? existing.tradeSetup.stopLoss;
+              const initialRisk = Math.abs(existing.priceAtSignal - originalSL);
               const pnl = (isBuy ? (currentPrice - existing.priceAtSignal) : (existing.priceAtSignal - currentPrice)) / initialRisk;
               const status = pnl > 0.1 ? SignalStatus.WIN : SignalStatus.LOSS;
               
@@ -369,7 +372,8 @@ async function runBackgroundMonitor() {
                 scoreBreakdown: result.scoreBreakdown,
                 estimatedDuration: result.estimatedDuration,
                 isNew: true,
-                isBreakevenSet: false
+                isBreakevenSet: false,
+                originalStopLoss: result.tradeSetup.stopLoss
               };
 
               const { isAllowed, reason } = checkCurrencyExposure(activeSignals, newSignal, MAX_CURRENCY_EXPOSURE);
