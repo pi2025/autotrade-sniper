@@ -7,7 +7,7 @@ interface Props {
 }
 
 // Sécurisation via Variable d'Environnement avec fallback
-const APP_PASSWORD = process.env.VITE_APP_PASSWORD || 'QUANTUM'; 
+const APP_PASSWORD = process.env.VITE_APP_PASSWORD || '';
 
 export const LoginGate: React.FC<Props> = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -35,6 +35,22 @@ export const LoginGate: React.FC<Props> = ({ children }) => {
 
   if (isAuthenticated) {
     return <>{children}</>;
+  }
+
+  if (!APP_PASSWORD) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+        <div className="bg-slate-900 border border-rose-500/30 rounded-3xl p-8 max-w-md w-full shadow-2xl">
+          <div className="w-16 h-16 bg-rose-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-rose-500/20">
+            <AlertCircle className="w-8 h-8 text-rose-400" />
+          </div>
+          <h1 className="text-2xl font-black text-white mb-2 text-center uppercase tracking-tight">Configuration requise</h1>
+          <p className="text-slate-400 text-sm font-medium text-center">
+            Definissez VITE_APP_PASSWORD avant de publier le terminal.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (

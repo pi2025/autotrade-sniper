@@ -6,6 +6,15 @@ import {
 } from 'lucide-react';
 import { STRATEGIES } from '../services/marketEngine';
 
+interface HealthStatus {
+  services?: {
+    supabase?: boolean;
+    telegram?: boolean;
+    gemini?: boolean;
+    ctrader?: boolean;
+  };
+}
+
 const Admin: React.FC = () => {
   const { 
     assets, toggleAsset, activeStrategy, setStrategy, emailConfig, updateEmailConfig, resetToDefaults, mutedAssets = {}, clearMuted 
@@ -15,6 +24,7 @@ const Admin: React.FC = () => {
   const [n8nWebhook, setN8nWebhook] = useState(localStorage.getItem('n8n_webhook') || '');
   const [isTestingN8n, setIsTestingN8n] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
+  const [health, setHealth] = useState<HealthStatus | null>(null);
 
   // Sync local state when global state updates (important for first load)
   useEffect(() => {
@@ -32,6 +42,10 @@ const Admin: React.FC = () => {
     if ('Notification' in window) {
       setNotificationPermission(Notification.permission);
     }
+    fetch('/api/health')
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => setHealth(data))
+      .catch(() => setHealth(null));
   }, []);
 
   const requestNotificationPermission = async () => {
@@ -80,7 +94,7 @@ const Admin: React.FC = () => {
           <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800">
             <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Supabase Connection</p>
             <div className="flex items-center gap-2">
-              {process.env.VITE_SUPABASE_URL ? (
+              {health?.services?.supabase ? (
                 <><CheckCircle className="w-4 h-4 text-emerald-500" /> <span className="text-xs text-white font-bold">Configured</span></>
               ) : (
                 <><AlertTriangle className="w-4 h-4 text-rose-500" /> <span className="text-xs text-rose-500 font-bold">Missing URL</span></>
@@ -90,7 +104,7 @@ const Admin: React.FC = () => {
           <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800">
             <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Telegram Alerts</p>
             <div className="flex items-center gap-2">
-              {process.env.TELEGRAM_BOT_TOKEN ? (
+              {health?.services?.telegram ? (
                 <><CheckCircle className="w-4 h-4 text-emerald-500" /> <span className="text-xs text-white font-bold">Configured</span></>
               ) : (
                 <><AlertTriangle className="w-4 h-4 text-amber-500" /> <span className="text-xs text-amber-500 font-bold">Not Set</span></>
@@ -100,7 +114,7 @@ const Admin: React.FC = () => {
           <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800">
             <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Gemini AI</p>
             <div className="flex items-center gap-2">
-              {process.env.API_KEY ? (
+              {health?.services?.gemini ? (
                 <><CheckCircle className="w-4 h-4 text-emerald-500" /> <span className="text-xs text-white font-bold">Configured</span></>
               ) : (
                 <><AlertTriangle className="w-4 h-4 text-rose-500" /> <span className="text-xs text-rose-500 font-bold">Missing Key</span></>

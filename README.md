@@ -1,89 +1,46 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# AutoTrade Sniper V15
 
-# AutoTrade Systematic V11
+Plateforme de trading algorithmique avec frontend React/Vite, API Express, Supabase, alertes Telegram, analyse IA et controle d'execution cTrader.
 
-Plateforme de Trading Algorithmique V11 avec intégration Gemini AI et Supabase.
+## Demarrage local
 
-## 🚀 Installation & Démarrage
+```bash
+npm install
+npm run dev
+```
 
-1. **Installer les dépendances :**
-   ```bash
-   npm install
-   ```
+Le script `dev` lance `server.ts`, qui sert l'API `/api/*` et le frontend Vite en developpement.
 
-2. **Configuration Supabase (Base de données) :**
-   Créez un projet sur [Supabase.com](https://supabase.com), allez dans l'éditeur SQL et exécutez ce script :
+## Verification
 
-   ```sql
-   -- 1. Table des Signaux Actifs
-   create table public.signals (
-     id text not null primary key,
-     asset text not null,
-     timeframe text not null,
-     content jsonb not null,
-     created_at timestamp with time zone default timezone('utc'::text, now()) not null
-   );
+```bash
+npm.cmd run lint
+npm.cmd run build
+```
 
-   -- 2. Table de l'Historique (Signaux fermés)
-   create table public.history (
-     id text not null primary key,
-     asset text not null,
-     pnl numeric,
-     closed_at timestamp with time zone,
-     content jsonb not null
-   );
+Sur PowerShell Windows, utilisez `npm.cmd` si l'execution de `npm.ps1` est bloquee par la policy locale.
 
-   -- 3. Table de Configuration (Persistance des réglages)
-   create table public.app_config (
-     key text not null primary key,
-     value jsonb not null
-   );
+## Variables d'environnement
 
-   -- 4. Table des Logs du Scanner
-   create table public.scan_logs (
-     id text not null primary key,
-     timestamp bigint not null,
-     asset text not null,
-     timeframe text not null,
-     status text not null,
-     message text not null,
-     score numeric
-   );
+Copiez `.env.example` vers `.env`, puis renseignez les valeurs necessaires:
 
-   -- Désactivation RLS pour le mode démo (ou configurez vos policies)
-   alter table public.signals enable row level security;
-   create policy "Public Access Signals" on public.signals for all using (true);
-   
-   alter table public.history enable row level security;
-   create policy "Public Access History" on public.history for all using (true);
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_KEY`
+- `VITE_APP_PASSWORD`
+- `API_SECRET_TOKEN`
+- `API_KEY`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `CTRADER_CLIENT_ID`
+- `CTRADER_CLIENT_SECRET`
+- `CTRADER_ACCESS_TOKEN`
+- `CTRADER_ACCOUNT_ID`
+- `CTRADER_LIVE=false`
 
-   alter table public.app_config enable row level security;
-   create policy "Public Access Config" on public.app_config for all using (true);
+Voir [docs/go-to-market-checklist.md](docs/go-to-market-checklist.md) pour les controles de production.
 
-   alter table public.scan_logs enable row level security;
-   create policy "Public Access Logs" on public.scan_logs for all using (true);
-   ```
+## Deploiement
 
-3. **Variables d'environnement :**
-   Créez un fichier `.env` à la racine du projet et ajoutez vos clés :
-
-   ```env
-   API_KEY=votre_cle_google_gemini
-   VITE_SUPABASE_URL=votre_url_supabase
-   VITE_SUPABASE_KEY=votre_cle_anon_publique_supabase
-   ```
-
-4. **Lancer l'application :**
-   ```bash
-   npm run dev
-   ```
-
-## Architecture
-
-- **Frontend**: React 19, Vite, TailwindCSS
-- **AI**: Google Gemini 2.5 Flash
-- **Backend**: Supabase (PostgreSQL)
-- **Engine**: Trend Following Systematic (Donchian/EMA/ATR)
-- **Version**: V11.0.0
+- Netlify publie `dist` et proxifie `/api/*` vers Render via `netlify.toml`.
+- Render lance l'API avec `NODE_ENV=production npx tsx server.ts`.
+- En production, les routes sensibles refusent les requetes si aucune variable d'authentification n'est configuree.

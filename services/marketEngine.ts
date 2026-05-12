@@ -235,6 +235,11 @@ export const calculateIndicators = (
   } as any;
 };
 
+// Actifs nécessitant une taille de position réduite (facteur appliqué sur riskPerTradePercent)
+const ASSET_RISK_MULTIPLIER: Record<string, number> = {
+  'EURUSD=X': 0.5,
+};
+
 export const analyzeMarket = (
   symbol: string, price: number, ind: TechnicalIndicators | null, strategy: StrategyParams = DEFAULT_STRATEGY
 ): { signal: any, diagnostic: string } => {
@@ -317,8 +322,8 @@ export const analyzeMarket = (
         entryPrice: price, 
         stopLoss, 
         takeProfit,
-        positionSizeUnit: (strategy.capitalBase * (strategy.riskPerTradePercent / 100)) / riskDistance, 
-        riskAmount: strategy.capitalBase * (strategy.riskPerTradePercent / 100), 
+        positionSizeUnit: (strategy.capitalBase * ((strategy.riskPerTradePercent * (ASSET_RISK_MULTIPLIER[symbol] ?? 1)) / 100)) / riskDistance,
+        riskAmount: strategy.capitalBase * ((strategy.riskPerTradePercent * (ASSET_RISK_MULTIPLIER[symbol] ?? 1)) / 100),
         riskRewardRatio: rrRatio,
         breakevenPrice: type === SignalType.BUY ? price + (riskDistance * strategy.breakevenTriggerR) : price - (riskDistance * strategy.breakevenTriggerR)
       }
@@ -333,13 +338,13 @@ export const INITIAL_ASSETS: AssetConfig[] = [
   { symbol: 'USDJPY=X', type: AssetType.FOREX, active: true, name: "USD/JPY" },
   { symbol: 'AUDUSD=X', type: AssetType.FOREX, active: true, name: "AUD/USD" },
   { symbol: 'USDCAD=X', type: AssetType.FOREX, active: true, name: "USD/CAD" },
-  { symbol: 'USDCHF=X', type: AssetType.FOREX, active: true, name: "USD/CHF" },
+  { symbol: 'USDCHF=X', type: AssetType.FOREX, active: false, name: "USD/CHF" },
   { symbol: 'NZDUSD=X', type: AssetType.FOREX, active: true, name: "NZD/USD" },
   
   // Forex - Crosses
-  { symbol: 'EURGBP=X', type: AssetType.FOREX, active: true, name: "EUR/GBP" },
+  { symbol: 'EURGBP=X', type: AssetType.FOREX, active: false, name: "EUR/GBP" },
   { symbol: 'EURJPY=X', type: AssetType.FOREX, active: true, name: "EUR/JPY" },
-  { symbol: 'EURAUD=X', type: AssetType.FOREX, active: true, name: "EUR/AUD" },
+  { symbol: 'EURAUD=X', type: AssetType.FOREX, active: false, name: "EUR/AUD" },
   { symbol: 'EURCHF=X', type: AssetType.FOREX, active: true, name: "EUR/CHF" },
   { symbol: 'GBPJPY=X', type: AssetType.FOREX, active: true, name: "GBP/JPY" },
   { symbol: 'AUDJPY=X', type: AssetType.FOREX, active: true, name: "AUD/JPY" },

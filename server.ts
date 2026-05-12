@@ -2,6 +2,7 @@
 import 'dotenv/config';
 import express from "express";
 import { createServer as createViteServer } from "vite";
+import react from "@vitejs/plugin-react";
 import path from "path";
 import { fileURLToPath } from "url";
 import fetch from "node-fetch";
@@ -9,7 +10,7 @@ import { createClient } from '@supabase/supabase-js';
 import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
-import type { AgentMode } from "./types.ts";
+import type { AgentLimits, AgentMode } from "./types.ts";
 import { ctraderService } from "./services/ctraderService.ts";
 import type { OrderResult } from "./services/ctraderService.ts";
 import { agentController } from "./services/agentController.ts";
@@ -113,6 +114,11 @@ async function executeSignalById(idOrPrefix: string): Promise<OrderResult & { si
   const signal = findActiveSignalById(idOrPrefix);
   if (!signal) return { error: 'Signal non trouvé' };
   if (signal.ctraderPositionId) return { error: 'Déjà exécuté', positionId: signal.ctraderPositionId, signal };
+
+  if (process.env.CTRADER_LIVE !== 'true') {
+    console.warn(`⛔ CTRADER_LIVE != 'true' — ordre bloqué pour ${signal.asset}. Passez CTRADER_LIVE=true pour activer le trading live.`);
+    return { error: "Mode demo actif (CTRADER_LIVE != 'true'). Ordre non envoyé.", signal };
+  }
 
   try {
     if (!ctraderService.isConnected()) {
@@ -240,14 +246,19 @@ async function runBackgroundMonitor() {
   // Init agent controller (charge mode + limites depuis Supabase)
   await agentController.init(supabase);
 
-  // Init cTrader si mode != SIGNALS_ONLY
+  // Init cTrader si mode != SIGNALS_ONLY et CTRADER_LIVE=true
   if (agentController.getMode() !== 'SIGNALS_ONLY') {
-    try {
-      await ctraderService.init();
-      console.log('✅ cTrader service initialisé');
-    } catch (e: any) {
-      console.error('❌ cTrader init échoué:', e.message, '— mode forcé SIGNALS_ONLY');
+    if (process.env.CTRADER_LIVE !== 'true') {
+      console.warn("⛔ CTRADER_LIVE != 'true' — connexion cTrader ignorée. Mode forcé SIGNALS_ONLY.");
       await agentController.setMode('SIGNALS_ONLY');
+    } else {
+      try {
+        await ctraderService.init();
+        console.log('✅ cTrader service initialisé');
+      } catch (e: any) {
+        console.error('❌ cTrader init échoué:', e.message, '— mode forcé SIGNALS_ONLY');
+        await agentController.setMode('SIGNALS_ONLY');
+      }
     }
   }
 
@@ -468,7 +479,8 @@ async function runBackgroundMonitor() {
 // --- API SERVER ---
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
+  const isProduction = process.env.NODE_ENV === "production";
 
   app.use(express.json());
 
@@ -478,11 +490,79 @@ async function startServer() {
   });
 
   const apiRouter = express.Router();
+  const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+  const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const secret = process.env.API_SECRET_TOKEN;
+    const appPassword = process.env.VITE_APP_PASSWORD;
+    if (!secret && !appPassword) {
+      if (isProduction) {
+        return res.status(503).json({ error: "API auth is not configured" });
+      }
+      return next();
+    }
+
+    const rawAuth = req.headers.authorization ?? '';
+    const auth = rawAuth.startsWith('Bearer ') ? rawAuth.slice(7) : rawAuth;
+    if (!auth || (auth !== secret && auth !== appPassword)) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    next();
+  };
+
+  const sensitiveRateLimit = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const key = req.ip ?? 'unknown';
+    const now = Date.now();
+    const entry = rateLimitMap.get(key);
+
+    if (!entry || now > entry.resetAt) {
+      rateLimitMap.set(key, { count: 1, resetAt: now + 60_000 });
+      return next();
+    }
+
+    if (entry.count >= 10) {
+      return res.status(429).json({ error: "Too many requests" });
+    }
+
+    entry.count += 1;
+    next();
+  };
+
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of rateLimitMap) {
+      if (now > entry.resetAt) rateLimitMap.delete(key);
+    }
+  }, 60_000).unref();
+
+  const toLegacyMode = (mode: AgentMode): 'signals' | 'semi-auto' | 'autonomous' => {
+    if (mode === 'SEMI_AUTO') return 'semi-auto';
+    if (mode === 'AUTONOMOUS') return 'autonomous';
+    return 'signals';
+  };
+
+  const toAgentMode = (mode: unknown): AgentMode | null => {
+    if (mode === 'signals' || mode === 'SIGNALS_ONLY') return 'SIGNALS_ONLY';
+    if (mode === 'semi-auto' || mode === 'SEMI_AUTO') return 'SEMI_AUTO';
+    if (mode === 'autonomous' || mode === 'AUTONOMOUS') return 'AUTONOMOUS';
+    if (mode === 'EMERGENCY_STOP') return 'EMERGENCY_STOP';
+    return null;
+  };
 
   // Endpoints API
   apiRouter.get("/health", (req, res) => {
     console.log("GET /api/health");
-    res.json({ status: "ok", time: new Date().toISOString() });
+    res.json({
+      status: "ok",
+      time: new Date().toISOString(),
+      services: {
+        supabase: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY),
+        telegram: Boolean(TELEGRAM_TOKEN && TELEGRAM_CHAT_ID),
+        gemini: Boolean(process.env.API_KEY && process.env.API_KEY !== 'votre_cle_gemini'),
+        ctrader: Boolean(process.env.CTRADER_ACCESS_TOKEN && process.env.CTRADER_ACCOUNT_ID),
+      },
+    });
   });
 
 
@@ -503,20 +583,60 @@ async function startServer() {
   });
   apiRouter.get("/engine/status", (req, res) => {
     console.log("GET /api/engine/status");
+    const limits = agentController.getLimits();
     res.json({
       isRunning: isEngineRunning,
       lastScanTime,
       lastBatchTimeMs,
       activeCount: activeSignals.length,
       activeStrategyId: activeStrategy.id,
-      mutedAssets
+      mutedAssets,
+      agentMode: toLegacyMode(agentController.getMode()),
+      riskLimits: {
+        maxConcurrentTrades: limits.maxSimultaneousTrades,
+        maxTotalRiskPercent: limits.maxRiskPercent,
+        maxDrawdownPercent: limits.maxDrawdownPercent,
+      },
     });
   });
-  apiRouter.post("/engine/toggle", (req, res) => {
+  apiRouter.post("/engine/risk", requireAuth, async (req, res) => {
+    const { maxConcurrentTrades, maxTotalRiskPercent, maxDrawdownPercent } = req.body;
+    const nextLimits: Partial<AgentLimits> = {};
+    if (maxConcurrentTrades !== undefined) nextLimits.maxSimultaneousTrades = maxConcurrentTrades;
+    if (maxTotalRiskPercent !== undefined) nextLimits.maxRiskPercent = maxTotalRiskPercent;
+    if (maxDrawdownPercent !== undefined) nextLimits.maxDrawdownPercent = maxDrawdownPercent;
+    await agentController.setLimits(nextLimits);
+    const limits = agentController.getLimits();
+    res.json({
+      success: true,
+      riskLimits: {
+        maxConcurrentTrades: limits.maxSimultaneousTrades,
+        maxTotalRiskPercent: limits.maxRiskPercent,
+        maxDrawdownPercent: limits.maxDrawdownPercent,
+      },
+    });
+  });
+  apiRouter.post("/engine/mode", sensitiveRateLimit, requireAuth, async (req, res) => {
+    const mode = toAgentMode(req.body?.mode);
+    if (!mode || mode === 'EMERGENCY_STOP') {
+      return res.status(400).json({ error: "Mode invalide. Valeurs: signals, semi-auto, autonomous" });
+    }
+    if (mode !== 'SIGNALS_ONLY' && !ctraderService.isConnected()) {
+      if (process.env.CTRADER_LIVE !== 'true') {
+        return res.status(400).json({ error: "CTRADER_LIVE != 'true' — mode live non disponible en démo." });
+      }
+      try { await ctraderService.init(); } catch (e: any) {
+        return res.status(500).json({ error: `cTrader init échoué: ${e.message}` });
+      }
+    }
+    await agentController.setMode(mode);
+    res.json({ success: true, agentMode: toLegacyMode(mode), mode });
+  });
+  apiRouter.post("/engine/toggle", requireAuth, (req, res) => {
     isEngineRunning = !isEngineRunning;
     res.json({ isRunning: isEngineRunning });
   });
-  apiRouter.post("/engine/strategy", (req, res) => {
+  apiRouter.post("/engine/strategy", requireAuth, (req, res) => {
     const { strategyId } = req.body;
     const strategy = STRATEGIES.find(s => s.id === strategyId);
     if (strategy) {
@@ -526,12 +646,12 @@ async function startServer() {
       res.status(400).json({ error: "Stratégie invalide" });
     }
   });
-  apiRouter.post("/engine/mute", (req, res) => {
+  apiRouter.post("/engine/mute", requireAuth, (req, res) => {
     const { symbol, durationMs } = req.body;
     mutedAssets[symbol] = Date.now() + (durationMs || COOLDOWN_MS);
     res.json({ success: true, mutedAssets });
   });
-  apiRouter.post("/engine/unmute", (req, res) => {
+  apiRouter.post("/engine/unmute", requireAuth, (req, res) => {
     const { symbol } = req.body;
     if (symbol) {
       delete mutedAssets[symbol];
@@ -555,11 +675,14 @@ async function startServer() {
     });
   });
 
-  apiRouter.post("/agent/mode", async (req, res) => {
+  apiRouter.post("/agent/mode", sensitiveRateLimit, requireAuth, async (req, res) => {
     const { mode } = req.body as { mode: AgentMode };
     const valid: AgentMode[] = ['SIGNALS_ONLY', 'SEMI_AUTO', 'AUTONOMOUS', 'EMERGENCY_STOP'];
-    if (!valid.includes(mode)) return res.status(400).json({ error: 'Mode invalide' });
+    if (!valid.includes(mode) || mode === 'EMERGENCY_STOP') return res.status(400).json({ error: 'Mode invalide. Utilisez /api/agent/emergency-stop pour le stop d\'urgence.' });
     if (mode !== 'SIGNALS_ONLY' && !ctraderService.isConnected()) {
+      if (process.env.CTRADER_LIVE !== 'true') {
+        return res.status(400).json({ error: "CTRADER_LIVE != 'true' — mode live non disponible en démo." });
+      }
       try { await ctraderService.init(); } catch (e: any) {
         return res.status(500).json({ error: `cTrader init échoué: ${e.message}` });
       }
@@ -568,7 +691,7 @@ async function startServer() {
     res.json({ success: true, mode });
   });
 
-  apiRouter.post("/agent/limits", async (req, res) => {
+  apiRouter.post("/agent/limits", requireAuth, async (req, res) => {
     const { maxSimultaneousTrades, maxRiskPercent, maxDrawdownPercent, positionSizing } = req.body;
     await agentController.setLimits({ maxSimultaneousTrades, maxRiskPercent, maxDrawdownPercent, positionSizing });
     res.json({ success: true, limits: agentController.getLimits() });
@@ -625,14 +748,15 @@ async function startServer() {
     }
   });
 
-  apiRouter.post("/agent/execute/:id", async (req, res) => {
-    const result = await executeSignalById(req.params.id);
+  apiRouter.post("/agent/execute/:id", sensitiveRateLimit, requireAuth, async (req, res) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const result = await executeSignalById(id);
     if (result.error === 'Signal non trouvé') return res.status(404).json({ error: result.error });
     if (result.error === 'Déjà exécuté') return res.status(400).json({ error: result.error, positionId: result.positionId });
     res.json({ success: !result.error, ...result });
   });
 
-  apiRouter.post("/agent/emergency-stop", async (req, res) => {
+  apiRouter.post("/agent/emergency-stop", sensitiveRateLimit, requireAuth, async (req, res) => {
     await agentController.setMode('EMERGENCY_STOP');
     isEngineRunning = false;
     const results = await Promise.allSettled(
@@ -646,7 +770,7 @@ async function startServer() {
     res.json({ success: true, closedCount: results.length });
   });
 
-  apiRouter.delete("/signals/:id", async (req, res) => {
+  apiRouter.delete("/signals/:id", requireAuth, async (req, res) => {
     const { id } = req.params;
     const signal = activeSignals.find(s => s.id === id);
     if (signal) {
@@ -681,7 +805,24 @@ async function startServer() {
   });
 
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
+    const vite = await createViteServer({
+      root: __dirname,
+      configFile: false,
+      plugins: [react()],
+      resolve: {
+        alias: {
+          "@": __dirname,
+        },
+      },
+      define: {
+        "process.env.VITE_SUPABASE_URL": JSON.stringify(process.env.VITE_SUPABASE_URL || ""),
+        "process.env.VITE_SUPABASE_KEY": JSON.stringify(process.env.VITE_SUPABASE_KEY || ""),
+        "process.env.VITE_APP_PASSWORD": JSON.stringify(process.env.VITE_APP_PASSWORD || ""),
+        "process.env.VITE_API_URL": JSON.stringify(process.env.VITE_API_URL || ""),
+      },
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');

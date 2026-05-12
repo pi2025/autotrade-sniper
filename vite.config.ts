@@ -7,7 +7,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default defineConfig(({ mode }) => {
-    // Charge toutes les variables d'environnement du fichier .env
     const env = loadEnv(mode, __dirname, '');
 
     return {
@@ -22,12 +21,11 @@ export default defineConfig(({ mode }) => {
         }
       },
       define: {
-        // Injection sécurisée des clés API spécifiques
-        'process.env.API_KEY': JSON.stringify(env.API_KEY),
-        'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL),
-        'process.env.VITE_SUPABASE_KEY': JSON.stringify(env.VITE_SUPABASE_KEY),
-        // Fallback global (optionnel, mais gardé pour compatibilité rétroactive)
-        'process.env': JSON.stringify(env),
+        // Only expose public VITE_ variables to the browser bundle.
+        'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || ''),
+        'process.env.VITE_SUPABASE_KEY': JSON.stringify(env.VITE_SUPABASE_KEY || ''),
+        'process.env.VITE_APP_PASSWORD': JSON.stringify(env.VITE_APP_PASSWORD || ''),
+        'process.env.VITE_API_URL': JSON.stringify(env.VITE_API_URL || ''),
       },
       build: {
         outDir: 'dist',
