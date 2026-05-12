@@ -246,14 +246,18 @@ async function runBackgroundMonitor() {
   // Init agent controller (charge mode + limites depuis Supabase)
   await agentController.init(supabase);
 
-  // Init cTrader si mode != SIGNALS_ONLY
+  // Init cTrader si mode != SIGNALS_ONLY et CTRADER_LIVE=true
   if (agentController.getMode() !== 'SIGNALS_ONLY') {
-    try {
-      await ctraderService.init();
-      console.log('✅ cTrader service initialisé');
-    } catch (e: any) {
-      console.error('❌ cTrader init échoué:', e.message, '— mode forcé SIGNALS_ONLY');
-      await agentController.setMode('SIGNALS_ONLY');
+    if (process.env.CTRADER_LIVE !== 'true') {
+      console.warn("⛔ CTRADER_LIVE != 'true' — connexion cTrader ignorée au démarrage.");
+    } else {
+      try {
+        await ctraderService.init();
+        console.log('✅ cTrader service initialisé');
+      } catch (e: any) {
+        console.error('❌ cTrader init échoué:', e.message, '— mode forcé SIGNALS_ONLY');
+        await agentController.setMode('SIGNALS_ONLY');
+      }
     }
   }
 
@@ -616,6 +620,9 @@ async function startServer() {
       return res.status(400).json({ error: "Mode invalide. Valeurs: signals, semi-auto, autonomous" });
     }
     if (mode !== 'SIGNALS_ONLY' && !ctraderService.isConnected()) {
+      if (process.env.CTRADER_LIVE !== 'true') {
+        return res.status(400).json({ error: "CTRADER_LIVE != 'true' — mode live non disponible en démo." });
+      }
       try { await ctraderService.init(); } catch (e: any) {
         return res.status(500).json({ error: `cTrader init échoué: ${e.message}` });
       }
@@ -671,6 +678,9 @@ async function startServer() {
     const valid: AgentMode[] = ['SIGNALS_ONLY', 'SEMI_AUTO', 'AUTONOMOUS', 'EMERGENCY_STOP'];
     if (!valid.includes(mode)) return res.status(400).json({ error: 'Mode invalide' });
     if (mode !== 'SIGNALS_ONLY' && !ctraderService.isConnected()) {
+      if (process.env.CTRADER_LIVE !== 'true') {
+        return res.status(400).json({ error: "CTRADER_LIVE != 'true' — mode live non disponible en démo." });
+      }
       try { await ctraderService.init(); } catch (e: any) {
         return res.status(500).json({ error: `cTrader init échoué: ${e.message}` });
       }
