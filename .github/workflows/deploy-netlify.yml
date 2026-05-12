@@ -11,9 +11,11 @@ on:
       - 'components/**'
       - 'context/**'
       - 'services/**'
+      - 'server.ts'
       - 'public/**'
       - 'index.html'
       - 'vite.config.ts'
+      - 'render.yaml'
       - 'package.json'
       - 'tailwind.config.js'
       - 'tsconfig.json'
@@ -46,7 +48,7 @@ jobs:
         uses: nwtgck/actions-netlify@v3
         with:
           publish-dir: './dist'
-          production-branch: fix/security-audit
+          production-branch: main
           production-deploy: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
           deploy-message: "Deploy from GitHub Actions — ${{ github.sha }}"
