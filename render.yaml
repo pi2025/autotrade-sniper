@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: autotrade-sniper-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: NODE_ENV=production npx tsx server.ts
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_KEY
+        sync: false
+      - key: VITE_APP_PASSWORD
+        sync: false
+      - key: API_SECRET_TOKEN
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: CTRADER_CLIENT_ID
+        sync: false
+      - key: CTRADER_CLIENT_SECRET
+        sync: false
+      - key: CTRADER_ACCESS_TOKEN
+        sync: false
+      - key: CTRADER_ACCOUNT_ID
+        sync: false
+      - key: CTRADER_LIVE
+        value: "false"
