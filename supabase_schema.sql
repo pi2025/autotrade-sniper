@@ -39,10 +39,8 @@ CREATE POLICY "read_signals"    ON signals    FOR SELECT USING (true);
 CREATE POLICY "read_history"    ON history    FOR SELECT USING (true);
 CREATE POLICY "read_app_config" ON app_config FOR SELECT USING (true);
 
--- Les écritures viennent du backend Render via la clé anon.
--- Si RLS bloque les écritures, ajouter les policies ci-dessous ou
--- passer à la service_role key côté serveur :
---
--- CREATE POLICY "write_signals"    ON signals    FOR ALL USING (true) WITH CHECK (true);
--- CREATE POLICY "write_history"    ON history    FOR ALL USING (true) WITH CHECK (true);
--- CREATE POLICY "write_app_config" ON app_config FOR ALL USING (true) WITH CHECK (true);
+-- Écritures : le backend Render utilise la clé anon — les policies ci-dessous
+-- sont nécessaires pour que INSERT/UPDATE/DELETE passent sous RLS.
+CREATE POLICY "write_signals"    ON signals    FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "write_history"    ON history    FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "write_app_config" ON app_config FOR ALL USING (true) WITH CHECK (true);

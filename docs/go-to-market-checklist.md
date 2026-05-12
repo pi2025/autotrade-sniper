@@ -43,7 +43,7 @@
 - Auth headers present on all protected POST routes: `POST /api/engine/toggle`, `/api/engine/strategy`, `/api/engine/unmute` send `Authorization: Bearer <VITE_APP_PASSWORD>`
 - `CTRADER_LIVE` absent or `"false"` → `/api/agent/execute/:id`, `/api/engine/mode`, `/api/agent/mode` (non-SIGNALS_ONLY), and server startup all block cTrader connections with an explicit error
 - Supabase schema versioned in `supabase_schema.sql` — recreate tables from this file in case of disaster recovery
-- Supabase writes working: either enable write policies in `supabase_schema.sql` (uncomment the `FOR ALL` policies) OR switch `VITE_SUPABASE_KEY` to a `service_role` key on Render — RLS blocks all INSERT/UPDATE/DELETE with anon key by default
+- Supabase writes working: run `docs/supabase-rls-migration.sql` once in Supabase Dashboard → SQL Editor to enable RLS write policies (required when using anon key on Render)
 
 ## Launch Guardrails
 
