@@ -7,7 +7,7 @@ interface Props {
 }
 
 // Sécurisation via Variable d'Environnement avec fallback
-const APP_PASSWORD = process.env.VITE_APP_PASSWORD || '';
+const APP_PASSWORD = import.meta.env.VITE_APP_PASSWORD || '';
 
 export const LoginGate: React.FC<Props> = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
