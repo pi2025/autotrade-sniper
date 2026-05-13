@@ -1,5 +1,5 @@
 [build]
-  command = "echo ok"
+  command = "npm run build"
   publish = "dist"
 
 # Proxy toutes les requêtes /api/* vers le backend Render
