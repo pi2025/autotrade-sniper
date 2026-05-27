@@ -21,11 +21,12 @@ export default defineConfig(({ mode }) => {
         }
       },
       define: {
-        // Only expose public VITE_ variables to the browser bundle.
-        'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || ''),
-        'process.env.VITE_SUPABASE_KEY': JSON.stringify(env.VITE_SUPABASE_KEY || ''),
-        'process.env.VITE_APP_PASSWORD': JSON.stringify(env.VITE_APP_PASSWORD || ''),
-        'process.env.VITE_API_URL': JSON.stringify(env.VITE_API_URL || ''),
+        // loadEnv() reads .env files; process.env fallback handles CI/Vercel/Render
+        // where vars are injected directly into the environment (no .env file).
+        'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''),
+        'process.env.VITE_SUPABASE_KEY': JSON.stringify(env.VITE_SUPABASE_KEY || process.env.VITE_SUPABASE_KEY || ''),
+        'process.env.VITE_APP_PASSWORD': JSON.stringify(env.VITE_APP_PASSWORD || process.env.VITE_APP_PASSWORD || ''),
+        'process.env.VITE_API_URL': JSON.stringify(env.VITE_API_URL || process.env.VITE_API_URL || ''),
       },
       build: {
         outDir: 'dist',
