@@ -21,7 +21,7 @@ export const DEFAULT_POSITION_SIZING: AgentPositionSizing = {
   maxVolumeUnits: 100000,
 };
 
-const DEFAULT_LIMITS: AgentLimits = {
+export const DEFAULT_LIMITS: AgentLimits = {
   maxSimultaneousTrades: 3,
   maxRiskPercent: 5,
   maxDrawdownPercent: 15,

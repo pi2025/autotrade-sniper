@@ -15,14 +15,14 @@ root.render(
   </React.StrictMode>
 );
 
-// Enregistrement sécurisé du Service Worker
-if ('serviceWorker' in navigator && window.location.origin.includes('localhost')) {
+// Enregistrement du Service Worker (PWA — actif en prod et en local)
+if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js')
       .then(registration => {
         console.log('SW registered: ', registration);
       })
-      .catch(registrationError => {
+      .catch(() => {
         // Silencing cross-origin SW errors in sandbox environments
         console.debug('SW registration skipped or failed');
       });

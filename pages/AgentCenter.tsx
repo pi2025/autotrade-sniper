@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Eye, RefreshCw, Save, Shield, Zap } from 'lucide-react';
 import type { AgentLimits, AgentMode, AgentPositionSizing, AgentStatus } from '../types';
+import { DEFAULT_LIMITS } from '../services/agentController';
 
 type LegacyMode = 'signals' | 'semi-auto' | 'autonomous';
 
@@ -14,12 +15,6 @@ interface LegacyEngineStatus {
   };
   activeCount?: number;
 }
-
-const UI_TO_LEGACY: Record<Exclude<AgentMode, 'EMERGENCY_STOP'>, LegacyMode> = {
-  SIGNALS_ONLY: 'signals',
-  SEMI_AUTO: 'semi-auto',
-  AUTONOMOUS: 'autonomous',
-};
 
 const LEGACY_TO_UI: Record<string, AgentMode> = {
   signals: 'SIGNALS_ONLY',
@@ -43,25 +38,7 @@ const colorMap: Record<string, string> = {
 
 const AUTH = () => `Bearer ${import.meta.env.VITE_APP_PASSWORD ?? ''}`;
 
-const DEFAULT_LIMITS: AgentLimits = {
-  maxSimultaneousTrades: 3,
-  maxRiskPercent: 5,
-  maxDrawdownPercent: 15,
-  positionSizing: {
-    mode: 'RISK_PERCENT',
-    riskPercent: 1,
-    fixedAmount: 10,
-    fixedLot: 0.01,
-    multiplier: 1,
-    forexMultiplier: 1,
-    cryptoMultiplier: 0.25,
-    commodityMultiplier: 0.25,
-    indexMultiplier: 0.25,
-    stockMultiplier: 0.1,
-    minVolumeUnits: 1,
-    maxVolumeUnits: 100000,
-  },
-};
+// DEFAULT_LIMITS → importé depuis ../services/agentController (source de vérité unique)
 
 const normalizeLimits = (raw?: Partial<AgentLimits>): AgentLimits => ({
   ...DEFAULT_LIMITS,
@@ -79,7 +56,6 @@ const AgentCenter: React.FC = () => {
   const [limits, setLimits] = useState<AgentLimits>(DEFAULT_LIMITS);
   const [saving, setSaving] = useState(false);
   const [modeLoading, setModeLoading] = useState(false);
-  const [apiMode, setApiMode] = useState<'agent' | 'legacy'>('agent');
   const [error, setError] = useState<string | null>(null);
 
   const fetchStatus = async () => {
@@ -91,7 +67,6 @@ const AgentCenter: React.FC = () => {
         setActiveCount(data.activeCount ?? 0);
 
         if (data.agentMode) {
-          setApiMode('legacy');
           setStatus({
             mode: LEGACY_TO_UI[data.agentMode] ?? 'SIGNALS_ONLY',
             limits: normalizeLimits({
@@ -116,7 +91,6 @@ const AgentCenter: React.FC = () => {
       const agentRes = await fetch('/api/agent/status');
       if (agentRes.ok) {
         const data: AgentStatus = await agentRes.json();
-        setApiMode('agent');
         setStatus(data);
         setLimits(normalizeLimits(data.limits));
       }
@@ -136,12 +110,8 @@ const AgentCenter: React.FC = () => {
     setModeLoading(true);
     setError(null);
     try {
-      const endpoint = apiMode === 'legacy'
-        ? mode === 'EMERGENCY_STOP' ? '/api/agent/emergency-stop' : '/api/engine/mode'
-        : mode === 'EMERGENCY_STOP' ? '/api/agent/emergency-stop' : '/api/agent/mode';
-      const body = apiMode === 'legacy' && mode !== 'EMERGENCY_STOP'
-        ? { mode: UI_TO_LEGACY[mode] }
-        : mode === 'EMERGENCY_STOP' ? {} : { mode };
+      const endpoint = mode === 'EMERGENCY_STOP' ? '/api/agent/emergency-stop' : '/api/agent/mode';
+      const body = mode === 'EMERGENCY_STOP' ? {} : { mode };
 
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -160,18 +130,10 @@ const AgentCenter: React.FC = () => {
     setSaving(true);
     setError(null);
     try {
-      const endpoint = apiMode === 'legacy' ? '/api/engine/risk' : '/api/agent/limits';
-      const body = apiMode === 'legacy'
-        ? {
-            maxConcurrentTrades: limits.maxSimultaneousTrades,
-            maxTotalRiskPercent: limits.maxRiskPercent,
-            maxDrawdownPercent: limits.maxDrawdownPercent,
-          }
-        : limits;
-      const response = await fetch(endpoint, {
+      const response = await fetch('/api/agent/limits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: AUTH() },
-        body: JSON.stringify(body),
+        body: JSON.stringify(limits),
       });
       if (!response.ok) throw new Error(`Sauvegarde refusee par le serveur (${response.status})`);
       await fetchStatus();

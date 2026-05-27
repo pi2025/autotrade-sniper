@@ -1,10 +1,11 @@
 
 import React, { createContext, useContext, useEffect, useReducer, useRef } from 'react';
 import { AssetConfig, MarketData, Signal, TimeFrame, AssetType, StrategyParams, SignalStatus, SignalType, EmailConfig, TechnicalIndicators } from '../types';
-import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from '../services/marketEngine';
-import { fetchYahooData } from '../services/yahooService';
-import { fetchBinanceData } from '../services/binanceService';
+// calculateIndicators / analyzeMarket / fetchYahooData / fetchBinanceData sont
+// exécutés côté serveur — le frontend se contente de poller /api/signals.
+import { INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from '../services/marketEngine';
 import { supabase, isConfigured as isSupabaseConfigured } from '../services/supabaseClient';
+import { getCurrenciesFromAsset, checkCurrencyExposure, MAX_CURRENCY_EXPOSURE } from '../services/tradingUtils';
 
 const generateId = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
@@ -93,69 +94,8 @@ type Action =
   | { type: 'UPDATE_PERFORMANCE'; payload: number }
   | { type: 'RESET_DEFAULTS' };
 
-const MAX_CURRENCY_EXPOSURE = 2; // Maximum 2R net exposure per currency
-
-const getCurrenciesFromAsset = (asset: string, assetType: AssetType): { base: string; quote: string } | null => {
-  const specialMappings: Record<string, { base: string; quote: string }> = {
-    'GC=F': { base: 'XAU', quote: 'USD' },
-    'SI=F': { base: 'XAG', quote: 'USD' },
-    'CL=F': { base: 'WTI', quote: 'USD' },
-    '^GSPC': { base: 'SPX', quote: 'USD' },
-    '^IXIC': { base: 'NDX', quote: 'USD' },
-    '^FCHI': { base: 'CAC', quote: 'EUR' },
-  };
-  if (specialMappings[asset]) {
-    return specialMappings[asset];
-  }
-
-  if (assetType === AssetType.FOREX) {
-    const clean = asset.replace('=X', '');
-    if (clean.length === 6) {
-      return { base: clean.substring(0, 3), quote: clean.substring(3, 6) };
-    }
-  }
-
-  if (assetType === AssetType.CRYPTO) {
-    const parts = asset.split('-');
-    if (parts.length === 2) {
-      return { base: parts[0], quote: parts[1] };
-    }
-  }
-
-  return null;
-};
-
-const checkCurrencyExposure = (
-  openSignals: Signal[],
-  newSignal: Signal,
-  threshold: number
-): { isAllowed: boolean; reason: string } => {
-  const exposure: Record<string, number> = {};
-  const allSignals = [...openSignals, newSignal];
-
-  for (const s of allSignals) {
-    const currencies = getCurrenciesFromAsset(s.asset, s.assetType);
-    if (currencies) {
-      const { base, quote } = currencies;
-      const weight = s.type === SignalType.BUY ? 1 : -1;
-      exposure[base] = (exposure[base] || 0) + weight;
-      exposure[quote] = (exposure[quote] || 0) - weight;
-    }
-  }
-
-  const newSignalCurrencies = getCurrenciesFromAsset(newSignal.asset, newSignal.assetType);
-  if (newSignalCurrencies) {
-    const { base, quote } = newSignalCurrencies;
-    if (Math.abs(exposure[base]) > threshold) {
-      return { isAllowed: false, reason: `Rejet: Exposition sur ${base} > ${threshold}R` };
-    }
-    if (Math.abs(exposure[quote]) > threshold) {
-      return { isAllowed: false, reason: `Rejet: Exposition sur ${quote} > ${threshold}R` };
-    }
-  }
-
-  return { isAllowed: true, reason: '' };
-};
+// getCurrenciesFromAsset, checkCurrencyExposure, MAX_CURRENCY_EXPOSURE
+// → importés depuis ../services/tradingUtils (source de vérité unique)
 
 const signalsReducer = (state: SignalsState, action: Action): SignalsState => {
   switch (action.type) {

@@ -1,4 +1,10 @@
-.env 
-node_modules/ 
-dist/ 
-*.log 
+.env
+node_modules/
+dist/
+*.log
+.vercel
+.netlify/
+.omc/
+.claude/
+migrated_prompt_history/
+autotrade-sniper.code-workspace

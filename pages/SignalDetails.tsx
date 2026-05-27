@@ -7,7 +7,7 @@ import {
   ArrowLeft, Bot, Calculator, ArrowUpRight, ArrowDownRight, Activity, Zap, Check, X, AlertTriangle, ExternalLink, Globe, Newspaper, Hourglass, Trash2, ShieldAlert
 } from 'lucide-react';
 import { YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Area, AreaChart, Line, CartesianGrid, ReferenceArea } from 'recharts';
-import { generateSignalExplanation } from '../services/geminiService';
+// geminiService est serveur-only — on passe par l'endpoint /api/ai/explain
 
 const SignalDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -25,10 +25,25 @@ const SignalDetails: React.FC = () => {
     if (signal && !aiData.text && !loadingAi) {
       const fetchAi = async () => {
         setLoadingAi(true);
-        const data = await generateSignalExplanation(signal);
-        setAiData(data);
-        updateSignalExplanation(signal.id, data.text);
-        setLoadingAi(false);
+        try {
+          const res = await fetch('/api/ai/explain', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${import.meta.env.VITE_APP_PASSWORD ?? ''}`,
+            },
+            body: JSON.stringify({ signal }),
+          });
+          const data: { text: string; sources: any[] } = res.ok
+            ? await res.json()
+            : { text: `Erreur serveur IA (${res.status})`, sources: [] };
+          setAiData(data);
+          updateSignalExplanation(signal.id, data.text);
+        } catch (e: any) {
+          setAiData({ text: `Erreur réseau : ${e.message}`, sources: [] });
+        } finally {
+          setLoadingAi(false);
+        }
       };
       fetchAi();
     }

@@ -14,6 +14,8 @@ import type { AgentLimits, AgentMode } from "./types.ts";
 import { ctraderService } from "./services/ctraderService.ts";
 import type { OrderResult } from "./services/ctraderService.ts";
 import { agentController } from "./services/agentController.ts";
+import { generateSignalExplanation } from "./services/geminiService.ts";
+import { getCurrenciesFromAsset, checkCurrencyExposure, MAX_CURRENCY_EXPOSURE } from "./services/tradingUtils.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,9 +32,9 @@ process.on('unhandledRejection', (reason, promise) => {
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// Supabase Config
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_KEY;
+// Supabase Config — variables serveur uniquement (sans préfixe VITE_)
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_KEY;
 
 let supabase: any = null;
 if (SUPABASE_URL && SUPABASE_ANON_KEY) {
@@ -56,7 +58,7 @@ let mutedAssets: Record<string, number> = {};
 let activeStrategy = DEFAULT_STRATEGY;
 let lastScanTime = 0;
 let lastBatchTimeMs = 0;
-const MAX_CURRENCY_EXPOSURE = 2;
+
 const MAX_LOGS = 50;
 const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -137,43 +139,8 @@ async function executeSignalById(idOrPrefix: string): Promise<OrderResult & { si
   }
 }
 
-const getCurrenciesFromAsset = (asset: string, assetType: AssetType): { base: string; quote: string } | null => {
-  const specialMappings: Record<string, { base: string; quote: string }> = {
-    'GC=F': { base: 'XAU', quote: 'USD' },
-    'SI=F': { base: 'XAG', quote: 'USD' },
-    'CL=F': { base: 'WTI', quote: 'USD' },
-    '^GSPC': { base: 'SPX', quote: 'USD' },
-    '^IXIC': { base: 'NDX', quote: 'USD' },
-    '^FCHI': { base: 'CAC', quote: 'EUR' },
-  };
-  if (specialMappings[asset]) return specialMappings[asset];
-  if (assetType === AssetType.FOREX) {
-    const clean = asset.replace('=X', '');
-    if (clean.length === 6) return { base: clean.substring(0, 3), quote: clean.substring(3, 6) };
-  }
-  return null;
-};
-
-const checkCurrencyExposure = (openSignals: Signal[], newSignal: Signal, threshold: number): { isAllowed: boolean; reason: string } => {
-  const exposure: Record<string, number> = {};
-  const allSignals = [...openSignals, newSignal];
-  for (const s of allSignals) {
-    const currencies = getCurrenciesFromAsset(s.asset, s.assetType);
-    if (currencies) {
-      const { base, quote } = currencies;
-      const weight = s.type === SignalType.BUY ? 1 : -1;
-      exposure[base] = (exposure[base] || 0) + weight;
-      exposure[quote] = (exposure[quote] || 0) - weight;
-    }
-  }
-  const newSignalCurrencies = getCurrenciesFromAsset(newSignal.asset, newSignal.assetType);
-  if (newSignalCurrencies) {
-    const { base, quote } = newSignalCurrencies;
-    if (Math.abs(exposure[base] || 0) > threshold) return { isAllowed: false, reason: `Exposition ${base} > ${threshold}R` };
-    if (Math.abs(exposure[quote] || 0) > threshold) return { isAllowed: false, reason: `Exposition ${quote} > ${threshold}R` };
-  }
-  return { isAllowed: true, reason: '' };
-};
+// getCurrenciesFromAsset, checkCurrencyExposure, MAX_CURRENCY_EXPOSURE
+// → importés depuis ./services/tradingUtils.ts (source de vérité unique)
 
 async function fetchYahooInternal(symbol: string, interval: string = '15m', range: string = '15d', retries: number = 3) {
   const cacheKey = `${symbol}_${interval}_${range}`;
@@ -603,39 +570,7 @@ async function startServer() {
       },
     });
   });
-  apiRouter.post("/engine/risk", requireAuth, async (req, res) => {
-    const { maxConcurrentTrades, maxTotalRiskPercent, maxDrawdownPercent } = req.body;
-    const nextLimits: Partial<AgentLimits> = {};
-    if (maxConcurrentTrades !== undefined) nextLimits.maxSimultaneousTrades = maxConcurrentTrades;
-    if (maxTotalRiskPercent !== undefined) nextLimits.maxRiskPercent = maxTotalRiskPercent;
-    if (maxDrawdownPercent !== undefined) nextLimits.maxDrawdownPercent = maxDrawdownPercent;
-    await agentController.setLimits(nextLimits);
-    const limits = agentController.getLimits();
-    res.json({
-      success: true,
-      riskLimits: {
-        maxConcurrentTrades: limits.maxSimultaneousTrades,
-        maxTotalRiskPercent: limits.maxRiskPercent,
-        maxDrawdownPercent: limits.maxDrawdownPercent,
-      },
-    });
-  });
-  apiRouter.post("/engine/mode", sensitiveRateLimit, requireAuth, async (req, res) => {
-    const mode = toAgentMode(req.body?.mode);
-    if (!mode || mode === 'EMERGENCY_STOP') {
-      return res.status(400).json({ error: "Mode invalide. Valeurs: signals, semi-auto, autonomous" });
-    }
-    if (mode !== 'SIGNALS_ONLY' && !ctraderService.isConnected()) {
-      if (process.env.CTRADER_LIVE !== 'true') {
-        return res.status(400).json({ error: "CTRADER_LIVE != 'true' — mode live non disponible en démo." });
-      }
-      try { await ctraderService.init(); } catch (e: any) {
-        return res.status(500).json({ error: `cTrader init échoué: ${e.message}` });
-      }
-    }
-    await agentController.setMode(mode);
-    res.json({ success: true, agentMode: toLegacyMode(mode), mode });
-  });
+  // Routes legacy /engine/risk et /engine/mode supprimées — utiliser /agent/limits et /agent/mode
   apiRouter.post("/engine/toggle", requireAuth, (req, res) => {
     isEngineRunning = !isEngineRunning;
     res.json({ isRunning: isEngineRunning });
@@ -786,6 +721,24 @@ async function startServer() {
       res.json({ success: true });
     } else {
       res.status(404).json({ error: "Signal non trouvé" });
+    }
+  });
+
+  // --- ANALYSE IA (Gemini côté serveur) ---
+  apiRouter.post("/ai/explain", requireAuth, async (req, res) => {
+    const { signal } = req.body;
+    if (!signal) return res.status(400).json({ error: "Signal manquant dans le body" });
+
+    if (!process.env.API_KEY || process.env.API_KEY === 'votre_cle_gemini') {
+      return res.status(503).json({ error: "Clé API Gemini non configurée côté serveur" });
+    }
+
+    try {
+      const result = await generateSignalExplanation(signal);
+      res.json(result);
+    } catch (e: any) {
+      console.error("Erreur /api/ai/explain:", e.message);
+      res.status(500).json({ error: e.message ?? "Erreur IA inconnue" });
     }
   });
 
