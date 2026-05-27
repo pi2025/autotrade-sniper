@@ -1,8 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Public client variables injected by Vite. Do not keep project credentials as fallbacks in the bundle.
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_KEY || '';
+// Public client variables — use import.meta.env (native Vite, works on Vercel/CI without .env file).
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_KEY || '';
 
 export const isConfigured =
   SUPABASE_URL.length > 0 &&
