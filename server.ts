@@ -597,7 +597,7 @@ async function startServer() {
     mutedAssets[symbol] = Date.now() + (durationMs || COOLDOWN_MS);
     res.json({ success: true, mutedAssets });
   });
-  apiRouter.post("/engine/unmute", requireAuth, (req, res) => {
+  apiRouter.post("/engine/unmute", (req, res) => {
     const { symbol } = req.body;
     if (symbol) {
       delete mutedAssets[symbol];
