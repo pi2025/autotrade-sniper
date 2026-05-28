@@ -126,6 +126,29 @@ const AgentCenter: React.FC = () => {
     setModeLoading(false);
   };
 
+  const restart = async () => {
+    setModeLoading(true);
+    setError(null);
+    try {
+      const modeRes = await fetch('/api/agent/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: AUTH() },
+        body: JSON.stringify({ mode: 'SIGNALS_ONLY' }),
+      });
+      if (!modeRes.ok) throw new Error(`Reset mode echoue (${modeRes.status})`);
+      if (!engineRunning) {
+        await fetch('/api/engine/toggle', {
+          method: 'POST',
+          headers: { Authorization: AUTH() },
+        });
+      }
+      await fetchStatus();
+    } catch (event: any) {
+      setError(event.message ?? 'Redemarrage echoue');
+    }
+    setModeLoading(false);
+  };
+
   const saveLimits = async () => {
     setSaving(true);
     setError(null);
@@ -185,6 +208,24 @@ const AgentCenter: React.FC = () => {
       {error && (
         <div className="p-4 rounded-2xl border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs font-bold">
           {error}
+        </div>
+      )}
+
+      {currentMode === 'EMERGENCY_STOP' && (
+        <div className="p-6 rounded-2xl border border-rose-500/40 bg-rose-500/10 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+          <AlertTriangle className="w-8 h-8 text-rose-400 shrink-0" />
+          <div className="flex-1">
+            <p className="font-black text-rose-400 uppercase text-sm tracking-widest">Arret d'urgence actif</p>
+            <p className="text-slate-400 text-xs mt-1">Toutes les positions ont ete fermees. Le moteur est arrete.</p>
+          </div>
+          <button
+            onClick={restart}
+            disabled={modeLoading}
+            className="flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase transition-all active:scale-95 disabled:opacity-50 shrink-0"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Redemarrer
+          </button>
         </div>
       )}
 
