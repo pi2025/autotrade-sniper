@@ -32,9 +32,9 @@ process.on('unhandledRejection', (reason, promise) => {
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// Supabase Config — variables serveur uniquement (sans préfixe VITE_)
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_KEY;
+// Supabase Config — accepte les deux préfixes (avec et sans VITE_)
+const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_KEY ?? process.env.VITE_SUPABASE_KEY;
 
 let supabase: any = null;
 if (SUPABASE_URL && SUPABASE_ANON_KEY) {
@@ -213,19 +213,16 @@ async function runBackgroundMonitor() {
   // Init agent controller (charge mode + limites depuis Supabase)
   await agentController.init(supabase);
 
-  // Init cTrader si mode != SIGNALS_ONLY et CTRADER_LIVE=true
+  // Init cTrader si mode != SIGNALS_ONLY. ctraderService route vers demo ou live
+  // automatiquement via CTRADER_LIVE='true'|'false'.
   if (agentController.getMode() !== 'SIGNALS_ONLY') {
-    if (process.env.CTRADER_LIVE !== 'true') {
-      console.warn("⛔ CTRADER_LIVE != 'true' — connexion cTrader ignorée. Mode forcé SIGNALS_ONLY.");
+    try {
+      await ctraderService.init();
+      const env = process.env.CTRADER_LIVE === 'true' ? 'LIVE' : 'DEMO';
+      console.log(`✅ cTrader service initialisé (${env})`);
+    } catch (e: any) {
+      console.error('❌ cTrader init échoué:', e.message, '— mode forcé SIGNALS_ONLY');
       await agentController.setMode('SIGNALS_ONLY');
-    } else {
-      try {
-        await ctraderService.init();
-        console.log('✅ cTrader service initialisé');
-      } catch (e: any) {
-        console.error('❌ cTrader init échoué:', e.message, '— mode forcé SIGNALS_ONLY');
-        await agentController.setMode('SIGNALS_ONLY');
-      }
     }
   }
 
@@ -630,9 +627,6 @@ async function startServer() {
     const valid: AgentMode[] = ['SIGNALS_ONLY', 'SEMI_AUTO', 'AUTONOMOUS', 'EMERGENCY_STOP'];
     if (!valid.includes(mode) || mode === 'EMERGENCY_STOP') return res.status(400).json({ error: 'Mode invalide. Utilisez /api/agent/emergency-stop pour le stop d\'urgence.' });
     if (mode !== 'SIGNALS_ONLY' && !ctraderService.isConnected()) {
-      if (process.env.CTRADER_LIVE !== 'true') {
-        return res.status(400).json({ error: "CTRADER_LIVE != 'true' — mode live non disponible en démo." });
-      }
       try { await ctraderService.init(); } catch (e: any) {
         return res.status(500).json({ error: `cTrader init échoué: ${e.message}` });
       }
