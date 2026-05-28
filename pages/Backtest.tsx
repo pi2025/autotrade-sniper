@@ -54,6 +54,7 @@ const Backtest: React.FC = () => {
   ];
 
   const result = results[0];
+  const hasMarketData = Object.keys(marketData).length > 0;
 
   return (
     <div className="max-w-7xl mx-auto space-y-8 pb-20">
@@ -64,6 +65,13 @@ const Backtest: React.FC = () => {
           <p className="text-slate-500 text-sm">Optimisez et validez les stratégies sur les données historiques (~15 jours).</p>
         </div>
       </div>
+
+      {!hasMarketData && (
+        <div className="p-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 flex items-center gap-3 text-amber-300 text-xs font-bold">
+          <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+          Données de marché en cours de chargement — démarrez le moteur sur le Dashboard, puis attendez un premier scan avant de lancer le backtest.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* === CONFIGURATION PANEL === */}
@@ -106,9 +114,9 @@ const Backtest: React.FC = () => {
             />
 
             <div className="pt-6">
-              <button 
+              <button
                 onClick={handleRunBacktest}
-                disabled={isLoading}
+                disabled={isLoading || !hasMarketData}
                 className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl font-black text-sm uppercase transition-all shadow-lg active:scale-95 bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:from-amber-400 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}

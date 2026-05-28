@@ -125,7 +125,7 @@ const Admin: React.FC = () => {
         </div>
         <div className="px-8 pb-8">
           <p className="text-[10px] text-slate-500 italic">
-            Note: Si les variables sont manquantes, configurez-les dans le menu "Settings" de AI Studio.
+            Note: Si des variables sont manquantes, configurez-les dans le menu "Environment Variables" de Render.com.
           </p>
         </div>
       </section>

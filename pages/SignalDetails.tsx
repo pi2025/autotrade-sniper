@@ -292,7 +292,11 @@ const SignalDetails: React.FC = () => {
                 
                 <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 mt-4">
                    <div className="text-[9px] text-slate-500 uppercase font-black mb-1">Taille de Position Sug.</div>
-                   <div className="text-sm font-bold text-white">{(signal.tradeSetup.positionSizeUnit / 1000).toFixed(2)} Lots Standard</div>
+                   <div className="text-sm font-bold text-white">
+                     {signal.tradeSetup?.positionSizeUnit
+                       ? `${(signal.tradeSetup.positionSizeUnit / 1000).toFixed(2)} Lots Standard`
+                       : "Calculé par l'agent"}
+                   </div>
                    <div className="text-[8px] text-slate-600 mt-1 italic">Calculé selon Kelly Criterion & Volatilité ATR</div>
                 </div>
              </div>
