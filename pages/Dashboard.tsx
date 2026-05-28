@@ -3,9 +3,9 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useSignals } from '../context/SignalsContext';
 import SignalCard from '../components/SignalCard';
 import { SignalType, SignalStatus } from '../types';
-import { 
-  PauseCircle, PlayCircle, Activity, Loader2, Target, Zap, Clock, 
-  CheckCircle2, Globe, ShieldCheck, AlertTriangle, HelpCircle, Sparkles, Monitor
+import {
+  PauseCircle, PlayCircle, Activity, Loader2, Target, Zap,
+  CheckCircle2, Globe, ShieldCheck, AlertTriangle, HelpCircle
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -28,17 +28,6 @@ const Dashboard: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'ACTIVE' | 'HISTORY'>('ACTIVE');
   const [showHelp, setShowHelp] = useState(false);
-  const [hasAiKey, setHasAiKey] = useState(false);
-
-  useEffect(() => {
-    const checkKey = async () => {
-      if (window.aistudio?.hasSelectedApiKey) {
-        const selected = await window.aistudio.hasSelectedApiKey();
-        setHasAiKey(selected);
-      }
-    };
-    checkKey();
-  }, []);
 
   const safeSignals = useMemo(() => 
     [...(Array.isArray(signals) ? signals : [])].sort((a, b) => b.timestamp - a.timestamp),
@@ -76,14 +65,6 @@ const Dashboard: React.FC = () => {
     return map;
   }, [safeSignals]);
 
-  const handleActivateIA = async () => {
-    if (window.aistudio?.openSelectKey) {
-      await window.aistudio.openSelectKey();
-      setHasAiKey(true);
-      window.location.reload();
-    }
-  };
-
   return (
     <div className="space-y-8 animate-fade-in">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
@@ -98,19 +79,7 @@ const Dashboard: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-4">
-          <button 
-            onClick={handleActivateIA}
-            className={`flex items-center gap-2 px-4 py-3 rounded-xl text-xs font-bold transition-all shadow-lg group border ${
-              hasAiKey 
-              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
-              : 'bg-slate-900 border-slate-700 text-cyan-400 hover:border-cyan-500'
-            }`}
-          >
-            <Sparkles className={`w-4 h-4 ${!hasAiKey && 'animate-pulse'}`} />
-            {hasAiKey ? 'IA CONFIGURÉE' : 'ACTIVER IA (SEARCH)'}
-          </button>
-          
-          <button 
+          <button
               onClick={toggleEngine}
               className={`flex items-center gap-3 px-8 py-4 rounded-2xl font-black transition-all shadow-2xl active:scale-95 ${
                   isEngineRunning 

@@ -514,18 +514,11 @@ async function startServer() {
     }
   }, 60_000).unref();
 
-  const toLegacyMode = (mode: AgentMode): 'signals' | 'semi-auto' | 'autonomous' => {
+  const toLegacyMode = (mode: AgentMode): 'signals' | 'semi-auto' | 'autonomous' | 'emergency-stop' => {
     if (mode === 'SEMI_AUTO') return 'semi-auto';
     if (mode === 'AUTONOMOUS') return 'autonomous';
+    if (mode === 'EMERGENCY_STOP') return 'emergency-stop';
     return 'signals';
-  };
-
-  const toAgentMode = (mode: unknown): AgentMode | null => {
-    if (mode === 'signals' || mode === 'SIGNALS_ONLY') return 'SIGNALS_ONLY';
-    if (mode === 'semi-auto' || mode === 'SEMI_AUTO') return 'SEMI_AUTO';
-    if (mode === 'autonomous' || mode === 'AUTONOMOUS') return 'AUTONOMOUS';
-    if (mode === 'EMERGENCY_STOP') return 'EMERGENCY_STOP';
-    return null;
   };
 
   // Endpoints API
@@ -618,6 +611,8 @@ async function startServer() {
       balance: accountInfo.balance,
       equity: accountInfo.equity,
       openPositions: activeSignals.filter(s => s.ctraderPositionId).length,
+      isRunning: isEngineRunning,
+      signalCount: activeSignals.length,
     });
   });
 

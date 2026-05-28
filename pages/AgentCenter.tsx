@@ -3,24 +3,6 @@ import { AlertTriangle, Eye, RefreshCw, Save, Shield, Zap } from 'lucide-react';
 import type { AgentLimits, AgentMode, AgentPositionSizing, AgentStatus } from '../types';
 import { DEFAULT_LIMITS } from '../services/agentController';
 
-type LegacyMode = 'signals' | 'semi-auto' | 'autonomous';
-
-interface LegacyEngineStatus {
-  isRunning: boolean;
-  agentMode?: LegacyMode;
-  riskLimits?: {
-    maxConcurrentTrades?: number;
-    maxTotalRiskPercent?: number;
-    maxDrawdownPercent?: number;
-  };
-  activeCount?: number;
-}
-
-const LEGACY_TO_UI: Record<string, AgentMode> = {
-  signals: 'SIGNALS_ONLY',
-  'semi-auto': 'SEMI_AUTO',
-  autonomous: 'AUTONOMOUS',
-};
 
 const MODES: { id: AgentMode; label: string; desc: string; color: string; icon: React.ReactNode }[] = [
   { id: 'SIGNALS_ONLY', label: 'SIGNAUX SEULS', desc: 'Detection uniquement, aucune execution', color: 'slate', icon: <Eye className="w-5 h-5" /> },
@@ -60,40 +42,13 @@ const AgentCenter: React.FC = () => {
 
   const fetchStatus = async () => {
     try {
-      const engineRes = await fetch('/api/engine/status');
-      if (engineRes.ok) {
-        const data: LegacyEngineStatus = await engineRes.json();
-        setEngineRunning(Boolean(data.isRunning));
-        setActiveCount(data.activeCount ?? 0);
-
-        if (data.agentMode) {
-          setStatus({
-            mode: LEGACY_TO_UI[data.agentMode] ?? 'SIGNALS_ONLY',
-            limits: normalizeLimits({
-              maxSimultaneousTrades: data.riskLimits?.maxConcurrentTrades ?? DEFAULT_LIMITS.maxSimultaneousTrades,
-              maxRiskPercent: data.riskLimits?.maxTotalRiskPercent ?? DEFAULT_LIMITS.maxRiskPercent,
-              maxDrawdownPercent: data.riskLimits?.maxDrawdownPercent ?? DEFAULT_LIMITS.maxDrawdownPercent,
-            }),
-            connected: false,
-            balance: 0,
-            equity: 0,
-            openPositions: data.activeCount ?? 0,
-          });
-          setLimits(normalizeLimits({
-            maxSimultaneousTrades: data.riskLimits?.maxConcurrentTrades ?? DEFAULT_LIMITS.maxSimultaneousTrades,
-            maxRiskPercent: data.riskLimits?.maxTotalRiskPercent ?? DEFAULT_LIMITS.maxRiskPercent,
-            maxDrawdownPercent: data.riskLimits?.maxDrawdownPercent ?? DEFAULT_LIMITS.maxDrawdownPercent,
-          }));
-          return;
-        }
-      }
-
-      const agentRes = await fetch('/api/agent/status');
-      if (agentRes.ok) {
-        const data: AgentStatus = await agentRes.json();
-        setStatus(data);
-        setLimits(normalizeLimits(data.limits));
-      }
+      const res = await fetch('/api/agent/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      setStatus(data as AgentStatus);
+      setLimits(normalizeLimits(data.limits));
+      setEngineRunning(Boolean(data.isRunning));
+      setActiveCount(data.signalCount ?? data.openPositions ?? 0);
     } catch {}
   };
 
