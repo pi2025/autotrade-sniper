@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect } from 'react';
 import { useSignals } from '../context/SignalsContext';
 import { 
@@ -97,7 +98,7 @@ const Admin: React.FC = () => {
               {health?.services?.supabase ? (
                 <><CheckCircle className="w-4 h-4 text-emerald-500" /> <span className="text-xs text-white font-bold">Configured</span></>
               ) : (
-                <><AlertTriangle className="w-4 h-4 text-rose-500" /> <span className="text-xs text-rose-500 font-bold">Missing URL</span></>
+                <><AlertTriangle className="w-4 h-4 text-amber-500" /> <span className="text-xs text-amber-400 font-bold">Ajouter SUPABASE_URL sur Render</span></>
               )}
             </div>
           </div>

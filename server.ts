@@ -235,6 +235,17 @@ async function runBackgroundMonitor() {
       continue;
     }
 
+    // Re-sync signals depuis Supabase à chaque cycle — prévient les doublons si
+    // plusieurs instances tournent simultanément (ex: local + Render).
+    if (supabase) {
+      try {
+        const { data: sigs } = await supabase.from('signals').select('*');
+        if (sigs) activeSignals = sigs.map(s => s.content);
+      } catch (e) {
+        console.warn('⚠️ Sync Supabase échoué, état cache utilisé');
+      }
+    }
+
     const startTime = Date.now();
     console.log(`[${new Date().toLocaleTimeString()}] Scan en cours...`);
 

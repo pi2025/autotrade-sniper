@@ -4,7 +4,7 @@ import { AssetConfig, MarketData, Signal, TimeFrame, AssetType, StrategyParams, 
 // calculateIndicators / analyzeMarket / fetchYahooData / fetchBinanceData sont
 // exécutés côté serveur — le frontend se contente de poller /api/signals.
 import { INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from '../services/marketEngine';
-import { supabase, isConfigured as isSupabaseConfigured } from '../services/supabaseClient';
+// Supabase direct supprimé — le frontend passe exclusivement par l'API (/api/signals, /api/history).
 import { getCurrenciesFromAsset, checkCurrencyExposure, MAX_CURRENCY_EXPOSURE } from '../services/tradingUtils';
 
 const generateId = () => {
@@ -181,24 +181,8 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const localEmail = localStorage.getItem('v15_email_config');
       if (localEmail) dispatch({ type: 'UPDATE_EMAIL_CONFIG', payload: JSON.parse(localEmail) });
 
-      if (!isSupabaseConfigured) {
-        const localSigs = localStorage.getItem('v15_signals');
-        if (localSigs) dispatch({ type: 'LOAD_ACTIVE_SIGNALS', payload: JSON.parse(localSigs) });
-        const localHisto = localStorage.getItem('v15_history');
-        if (localHisto) dispatch({ type: 'LOAD_HISTORY', payload: JSON.parse(localHisto) });
-        dispatch({ type: 'SET_LOADING', payload: false });
-        return;
-      }
-
-      try {
-        const { data: cloudSigs } = await supabase.from('signals').select('*');
-        if (cloudSigs) dispatch({ type: 'LOAD_ACTIVE_SIGNALS', payload: cloudSigs.map(s => s.content) });
-        
-        const { data: cloudHisto } = await supabase.from('history').select('*').order('closed_at', { ascending: false });
-        if (cloudHisto) dispatch({ type: 'LOAD_HISTORY', payload: cloudHisto.map(h => h.content) });
-      } catch (e) {
-        console.warn("Supabase load failed, falling back to local.");
-      }
+      // Données chargées exclusivement via syncWithServer() (API polling toutes les 10s).
+      // Le premier appel se fait immédiatement au montage — pas besoin de Supabase direct.
       dispatch({ type: 'SET_LOADING', payload: false });
     };
     initApp();
