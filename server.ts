@@ -117,9 +117,8 @@ async function executeSignalById(idOrPrefix: string): Promise<OrderResult & { si
   if (!signal) return { error: 'Signal non trouvé' };
   if (signal.ctraderPositionId) return { error: 'Déjà exécuté', positionId: signal.ctraderPositionId, signal };
 
-  if (process.env.CTRADER_LIVE !== 'true') {
-    console.warn(`⛔ CTRADER_LIVE != 'true' — ordre bloqué pour ${signal.asset}. Passez CTRADER_LIVE=true pour activer le trading live.`);
-    return { error: "Mode demo actif (CTRADER_LIVE != 'true'). Ordre non envoyé.", signal };
+  if (signal.assetType === AssetType.CRYPTO) {
+    return { error: `Exécution bloquée pour ${signal.asset}: crypto non exécutable sur cTrader.`, signal };
   }
 
   try {
@@ -360,7 +359,7 @@ async function runBackgroundMonitor() {
 
                 const decision = agentController.shouldExecute(newSignal, activeSignals);
 
-                if (decision.execute) {
+                if (decision.execute && newSignal.assetType !== AssetType.CRYPTO) {
                   const accountInfo = await ctraderService.getAccountInfo();
                   const result = await ctraderService.placeOrder(newSignal, accountInfo.balance, agentController.getPositionSizing());
                   if (result.positionId) {
