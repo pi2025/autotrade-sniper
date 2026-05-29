@@ -149,7 +149,21 @@ const AgentCenter: React.FC = () => {
         headers: { 'Content-Type': 'application/json', Authorization: AUTH() },
         body: JSON.stringify(limits),
       });
-      if (!response.ok) throw new Error(`Sauvegarde refusee par le serveur (${response.status})`);
+      if (!response.ok && response.status === 404) {
+        // Fallback: ancien endpoint pour déploiements Render non mis à jour
+        const legacyRes = await fetch('/api/engine/risk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: AUTH() },
+          body: JSON.stringify({
+            maxConcurrentTrades: limits.maxSimultaneousTrades,
+            maxTotalRiskPercent: limits.maxRiskPercent,
+            maxDrawdownPercent: limits.maxDrawdownPercent,
+          }),
+        });
+        if (!legacyRes.ok) throw new Error(`Sauvegarde refusee par le serveur (${legacyRes.status})`);
+      } else if (!response.ok) {
+        throw new Error(`Sauvegarde refusee par le serveur (${response.status})`);
+      }
       await fetchStatus();
     } catch (event: any) {
       setError(event.message ?? 'Sauvegarde refusee par le serveur');
