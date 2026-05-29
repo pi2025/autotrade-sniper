@@ -175,14 +175,23 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   useEffect(() => {
     const initApp = async () => {
+      // Restaurer l'état depuis localStorage immédiatement (évite un flash vide)
+      const localHistory = localStorage.getItem('v15_history');
+      if (localHistory) {
+        try { dispatch({ type: 'LOAD_HISTORY', payload: JSON.parse(localHistory) }); } catch {}
+      }
+      const localSignals = localStorage.getItem('v15_signals');
+      if (localSignals) {
+        try { dispatch({ type: 'LOAD_ACTIVE_SIGNALS', payload: JSON.parse(localSignals) }); } catch {}
+      }
       const localMuted = localStorage.getItem('v15_muted_obj');
-      if (localMuted) dispatch({ type: 'LOAD_MUTED', payload: JSON.parse(localMuted) });
-
+      if (localMuted) {
+        try { dispatch({ type: 'LOAD_MUTED', payload: JSON.parse(localMuted) }); } catch {}
+      }
       const localEmail = localStorage.getItem('v15_email_config');
-      if (localEmail) dispatch({ type: 'UPDATE_EMAIL_CONFIG', payload: JSON.parse(localEmail) });
-
-      // Données chargées exclusivement via syncWithServer() (API polling toutes les 10s).
-      // Le premier appel se fait immédiatement au montage — pas besoin de Supabase direct.
+      if (localEmail) {
+        try { dispatch({ type: 'UPDATE_EMAIL_CONFIG', payload: JSON.parse(localEmail) }); } catch {}
+      }
       dispatch({ type: 'SET_LOADING', payload: false });
     };
     initApp();
@@ -245,7 +254,11 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
           const scanner = await checkJson(scannerRes);
 
           dispatch({ type: 'LOAD_ACTIVE_SIGNALS', payload: sigs });
-          dispatch({ type: 'LOAD_HISTORY', payload: hist });
+          // Ne pas écraser un historique local non-vide avec un tableau vide du serveur
+          // (protège contre les redémarrages Render qui perdent l'état en mémoire)
+          if (Array.isArray(hist) && hist.length > 0) {
+            dispatch({ type: 'LOAD_HISTORY', payload: hist });
+          }
           dispatch({ type: 'SET_ENGINE', payload: status.isRunning });
           dispatch({ type: 'SET_LAST_SCAN_TIME', payload: status.lastScanTime });
           dispatch({ type: 'UPDATE_PERFORMANCE', payload: status.lastBatchTimeMs });
