@@ -523,10 +523,11 @@ async function startServer() {
 
   // Endpoints API
   apiRouter.get("/health", (req, res) => {
-    console.log("GET /api/health");
     res.json({
       status: "ok",
+      version: "v16.1",
       time: new Date().toISOString(),
+      routes: ["GET /agent/status", "POST /agent/mode", "POST /agent/limits", "POST /agent/emergency-stop"],
       services: {
         supabase: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY),
         telegram: Boolean(TELEGRAM_TOKEN && TELEGRAM_CHAT_ID),
