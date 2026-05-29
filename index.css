@@ -1,7 +1,4 @@
-/* 
-   Style global compatible avec le script CDN Tailwind.
-   Nous n'utilisons pas @apply ici pour éviter les erreurs de build sans PostCSS.
-*/
+@import "tailwindcss";
 
 body {
   background-color: #020617; /* bg-slate-950 */
