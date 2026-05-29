@@ -43,12 +43,32 @@ const AgentCenter: React.FC = () => {
   const fetchStatus = async () => {
     try {
       const res = await fetch('/api/agent/status');
-      if (!res.ok) return;
-      const data = await res.json();
-      setStatus(data as AgentStatus);
-      setLimits(normalizeLimits(data.limits));
-      setEngineRunning(Boolean(data.isRunning));
-      setActiveCount(data.signalCount ?? data.openPositions ?? 0);
+      if (res.ok) {
+        const data = await res.json();
+        setStatus(data as AgentStatus);
+        setLimits(normalizeLimits(data.limits));
+        setEngineRunning(Boolean(data.isRunning));
+        setActiveCount(data.signalCount ?? data.openPositions ?? 0);
+        return;
+      }
+      // Fallback: ancien endpoint pour les déploiements Render non mis à jour
+      const legacyRes = await fetch('/api/engine/status');
+      if (!legacyRes.ok) return;
+      const legacy = await legacyRes.json();
+      const LEGACY_MAP: Record<string, AgentMode> = {
+        signals: 'SIGNALS_ONLY', 'semi-auto': 'SEMI_AUTO',
+        autonomous: 'AUTONOMOUS', 'emergency-stop': 'EMERGENCY_STOP',
+      };
+      const mode: AgentMode = LEGACY_MAP[legacy.agentMode] ?? 'SIGNALS_ONLY';
+      const lim = normalizeLimits({
+        maxSimultaneousTrades: legacy.riskLimits?.maxConcurrentTrades,
+        maxRiskPercent: legacy.riskLimits?.maxTotalRiskPercent,
+        maxDrawdownPercent: legacy.riskLimits?.maxDrawdownPercent,
+      });
+      setStatus({ mode, limits: lim, connected: false, balance: 0, equity: 0, openPositions: legacy.activeCount ?? 0 });
+      setLimits(lim);
+      setEngineRunning(Boolean(legacy.isRunning));
+      setActiveCount(legacy.activeCount ?? 0);
     } catch {}
   };
 
@@ -73,7 +93,22 @@ const AgentCenter: React.FC = () => {
         headers: { 'Content-Type': 'application/json', Authorization: AUTH() },
         body: JSON.stringify(body),
       });
-      if (!response.ok) throw new Error(`Changement refuse par le serveur (${response.status})`);
+
+      if (!response.ok && response.status === 404 && mode !== 'EMERGENCY_STOP') {
+        // Fallback: ancien endpoint pour déploiements Render non mis à jour
+        const LEGACY: Record<string, string> = {
+          SIGNALS_ONLY: 'signals', SEMI_AUTO: 'semi-auto',
+          AUTONOMOUS: 'autonomous', EMERGENCY_STOP: 'emergency-stop',
+        };
+        const legacyRes = await fetch('/api/engine/mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: AUTH() },
+          body: JSON.stringify({ mode: LEGACY[mode] }),
+        });
+        if (!legacyRes.ok) throw new Error(`Changement refuse par le serveur (${legacyRes.status})`);
+      } else if (!response.ok) {
+        throw new Error(`Changement refuse par le serveur (${response.status})`);
+      }
       await fetchStatus();
     } catch (event: any) {
       setError(event.message ?? 'Changement refuse par le serveur');
