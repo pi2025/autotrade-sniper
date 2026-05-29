@@ -92,10 +92,11 @@ const AgentCenter: React.FC = () => {
       });
       if (!modeRes.ok) throw new Error(`Reset mode echoue (${modeRes.status})`);
       if (!engineRunning) {
-        await fetch('/api/engine/toggle', {
+        const toggleRes = await fetch('/api/engine/toggle', {
           method: 'POST',
           headers: { Authorization: AUTH() },
         });
+        if (!toggleRes.ok) throw new Error(`Demarrage moteur echoue (${toggleRes.status})`);
       }
       await fetchStatus();
     } catch (event: any) {
@@ -150,7 +151,7 @@ const AgentCenter: React.FC = () => {
           {status && (
             <span className="text-slate-400 text-xs ml-4">
               cTrader: <strong className={isConnected ? 'text-emerald-400' : 'text-rose-400'}>{isConnected ? 'connecte' : 'deconnecte'}</strong>
-              &nbsp;· Signaux: <strong className="text-white">{activeCount || status.openPositions}</strong>
+              &nbsp;· Signaux: <strong className="text-white">{activeCount ?? status.openPositions}</strong>
               &nbsp;· Solde: <strong className="text-white">{status.balance.toFixed(2)}</strong>
             </span>
           )}

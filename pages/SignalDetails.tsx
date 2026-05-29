@@ -71,19 +71,19 @@ const SignalDetails: React.FC = () => {
   const chandelier = ind?.chandelierExit || signal.tradeSetup.stopLoss;
   const isExitTriggered = isBuy ? currentPrice <= chandelier : currentPrice >= chandelier;
 
-  const chartData = (currentMarketData.history || []).map((price, idx) => ({ 
-      i: idx, 
-      price, 
-      ema200: ind.ema200, 
+  const chartData = ind ? (currentMarketData.history || []).map((price, idx) => ({
+      i: idx,
+      price,
+      ema200: ind.ema200,
       emaH4: ind.emaH4,
       chandelier: chandelier,
-      upperDonchian: ind.donchian.upper,
-      lowerDonchian: ind.donchian.lower,
-      upperBand: ind.bollingerBands.upper,
-      lowerBand: ind.bollingerBands.lower,
+      upperDonchian: ind.donchian?.upper,
+      lowerDonchian: ind.donchian?.lower,
+      upperBand: ind.bollingerBands?.upper,
+      lowerBand: ind.bollingerBands?.lower,
       tp: signal.tradeSetup.takeProfit,
       sl: signal.tradeSetup.stopLoss
-  })).slice(-100);
+  })).slice(-100) : [];
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-32">
@@ -270,10 +270,10 @@ const SignalDetails: React.FC = () => {
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-xl">
             <h3 className="font-black text-white text-xs uppercase tracking-widest mb-8 flex items-center gap-2"><Zap className="w-4 h-4 text-cyan-400" /> Score de Conformité</h3>
             <div className="space-y-5">
-               <ComplianceItem label="Alignement Tendance H4" status={ind.mtfAlignment?.isAligned} />
-               <ComplianceItem label="Squeeze de Volatilité" status={ind.bollingerBands.isSqueezing} />
-               <ComplianceItem label="Momentum ADX (>32)" status={ind.adx > 32} />
-               <ComplianceItem label="Structure Donchian" status={isBuy ? currentPrice > ind.donchian.middle : currentPrice < ind.donchian.middle} />
+               <ComplianceItem label="Alignement Tendance H4" status={ind?.mtfAlignment?.isAligned} />
+               <ComplianceItem label="Squeeze de Volatilité" status={ind?.bollingerBands?.isSqueezing} />
+               <ComplianceItem label="Momentum ADX (>32)" status={(ind?.adx ?? 0) > 32} />
+               <ComplianceItem label="Structure Donchian" status={isBuy ? currentPrice > (ind?.donchian?.middle ?? 0) : currentPrice < (ind?.donchian?.middle ?? Infinity)} />
                <div className="pt-4 mt-4 border-t border-slate-800">
                   <div className="flex justify-between items-center">
                     <span className="text-[10px] text-slate-500 uppercase font-black">Probabilité Quantum</span>

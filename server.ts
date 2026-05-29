@@ -374,7 +374,7 @@ async function runBackgroundMonitor() {
 *TP:* ${newSignal.tradeSetup.takeProfit.toFixed(5)} | *SL:* ${newSignal.tradeSetup.stopLoss.toFixed(5)}
 *Position ID:* ${result.positionId ?? 'N/A'}
                   `);
-                } else if (decision.mode === 'SEMI_AUTO') {
+                } else if (decision.mode === 'SEMI_AUTO' && newSignal.assetType !== AssetType.CRYPTO) {
                   await sendTelegramMessage(`
 🔔 *SIGNAL EN ATTENTE DE VALIDATION* 🔔
 *Actif:* ${asset.name}
@@ -591,7 +591,7 @@ async function startServer() {
     mutedAssets[symbol] = Date.now() + (durationMs || COOLDOWN_MS);
     res.json({ success: true, mutedAssets });
   });
-  apiRouter.post("/engine/unmute", (req, res) => {
+  apiRouter.post("/engine/unmute", requireAuth, (req, res) => {
     const { symbol } = req.body;
     if (symbol) {
       delete mutedAssets[symbol];
@@ -622,9 +622,7 @@ async function startServer() {
     const valid: AgentMode[] = ['SIGNALS_ONLY', 'SEMI_AUTO', 'AUTONOMOUS', 'EMERGENCY_STOP'];
     if (!valid.includes(mode) || mode === 'EMERGENCY_STOP') return res.status(400).json({ error: 'Mode invalide. Utilisez /api/agent/emergency-stop pour le stop d\'urgence.' });
     if (mode !== 'SIGNALS_ONLY' && !ctraderService.isConnected()) {
-      try { await ctraderService.init(); } catch (e: any) {
-        return res.status(500).json({ error: `cTrader init échoué: ${e.message}` });
-      }
+      ctraderService.init().catch((e: any) => console.error('cTrader init error:', e.message));
     }
     await agentController.setMode(mode);
     res.json({ success: true, mode });
