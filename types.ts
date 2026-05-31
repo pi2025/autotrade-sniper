@@ -54,6 +54,49 @@ export interface AgentStatus {
   openPositions: number;
 }
 
+export type PerformanceAgentProfile = 'ADAPTIVE_PERFORMANCE' | 'CONSERVATIVE_RECOVERY' | 'AGGRESSIVE_GROWTH';
+
+export interface PerformanceStats {
+  count: number;
+  wins: number;
+  losses: number;
+  breakeven: number;
+  netR: number;
+  avgR: number;
+  winRate: number;
+  profitFactor: number;
+  maxDrawdownR: number;
+}
+
+export interface PerformanceAssetDecision extends PerformanceStats {
+  asset: string;
+  status: 'PREFERRED' | 'ALLOWED' | 'REDUCED' | 'BLOCKED';
+  reason: string;
+  riskMultiplier: number;
+}
+
+export interface PerformanceAgentState {
+  enabled: boolean;
+  profile: PerformanceAgentProfile;
+  lookbackTrades: number;
+  minTradesToJudge: number;
+  lastUpdated: number;
+  global: PerformanceStats;
+  assets: Record<string, PerformanceAssetDecision>;
+  blockedAssets: string[];
+  preferredAssets: string[];
+  blockedDirections: Record<string, string>;
+  strategyBias: {
+    adxBoost: number;
+    donchianBoost: number;
+    stopLossAtrBoost: number;
+    breakevenDelayR: number;
+    mode: 'NORMAL' | 'STRICT' | 'RECOVERY';
+    reason: string;
+  };
+  journal: string[];
+}
+
 export enum TimeFrame {
   M15 = '15m',
   H1 = '1h',
@@ -101,6 +144,7 @@ export interface TechnicalIndicators {
     lower: number;
     bandwidth: number;
     isSqueezing: boolean;
+    wasRecentlySqueezed: boolean;
   };
   trendContext: 'BULLISH' | 'BEARISH' | 'SIDEWAYS';
   rsi: number;
@@ -109,6 +153,8 @@ export interface TechnicalIndicators {
   ema200: number;
   emaH4: number; // For H4 trend context
   volumeTrend: 'HIGH' | 'LOW' | 'NEUTRAL';
+  volumeRatio: number;        // volume actuel / moyenne 20 bougies (1.0 = neutre)
+  hasVolumeData: boolean;     // false sur Forex tick-only → filtre ignoré
   marketPhase: MarketPhase;
   chandelierExit: number;
   choppiness: number;

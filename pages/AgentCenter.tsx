@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, Eye, RefreshCw, Save, Shield, Zap } from 'lucide-react';
-import type { AgentLimits, AgentMode, AgentPositionSizing, AgentStatus } from '../types';
+import { AlertTriangle, BrainCircuit, Eye, RefreshCw, Save, Shield, Zap } from 'lucide-react';
+import type { AgentLimits, AgentMode, AgentPositionSizing, AgentStatus, PerformanceAgentState } from '../types';
 import { DEFAULT_LIMITS } from '../services/agentController';
 
 
@@ -38,7 +38,9 @@ const AgentCenter: React.FC = () => {
   const [limits, setLimits] = useState<AgentLimits>(DEFAULT_LIMITS);
   const [saving, setSaving] = useState(false);
   const [modeLoading, setModeLoading] = useState(false);
+  const [learning, setLearning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [performanceAgent, setPerformanceAgent] = useState<PerformanceAgentState | null>(null);
 
   const fetchStatus = async () => {
     try {
@@ -49,6 +51,7 @@ const AgentCenter: React.FC = () => {
         setLimits(normalizeLimits(data.limits));
         setEngineRunning(Boolean(data.isRunning));
         setActiveCount(data.signalCount ?? data.openPositions ?? 0);
+        setPerformanceAgent(data.performanceAgent ?? null);
         return;
       }
       // Fallback: ancien endpoint pour les déploiements Render non mis à jour
@@ -69,6 +72,7 @@ const AgentCenter: React.FC = () => {
       setLimits(lim);
       setEngineRunning(Boolean(legacy.isRunning));
       setActiveCount(legacy.activeCount ?? 0);
+      setPerformanceAgent(null);
     } catch {}
   };
 
@@ -171,6 +175,45 @@ const AgentCenter: React.FC = () => {
     setSaving(false);
   };
 
+  const refreshLearning = async () => {
+    setLearning(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/agent/performance/learn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: AUTH() },
+        body: JSON.stringify({}),
+      });
+      if (!response.ok) throw new Error(`Apprentissage refuse par le serveur (${response.status})`);
+      const data = await response.json();
+      setPerformanceAgent(data.state);
+      await fetchStatus();
+    } catch (event: any) {
+      setError(event.message ?? 'Apprentissage refuse par le serveur');
+    }
+    setLearning(false);
+  };
+
+  const togglePerformanceAgent = async () => {
+    if (!performanceAgent) return;
+    setLearning(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/agent/performance/enabled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: AUTH() },
+        body: JSON.stringify({ enabled: !performanceAgent.enabled }),
+      });
+      if (!response.ok) throw new Error(`Changement agent refuse (${response.status})`);
+      const data = await response.json();
+      setPerformanceAgent(data.state);
+      await fetchStatus();
+    } catch (event: any) {
+      setError(event.message ?? 'Changement agent refuse');
+    }
+    setLearning(false);
+  };
+
   const updateSizing = <K extends keyof AgentPositionSizing>(key: K, value: AgentPositionSizing[K]) => {
     setLimits((prev) => ({
       ...prev,
@@ -232,6 +275,54 @@ const AgentCenter: React.FC = () => {
             Redemarrer
           </button>
         </div>
+      )}
+
+      {performanceAgent && (
+        <section className="bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4 mb-6">
+            <div className="flex items-center gap-3 flex-1">
+              <BrainCircuit className="w-5 h-5 text-cyan-400" />
+              <div>
+                <h2 className="text-sm font-black text-slate-300 uppercase tracking-widest">Agent IA Performance</h2>
+                <p className="text-xs text-slate-500 mt-1">{performanceAgent.strategyBias.reason}</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={togglePerformanceAgent}
+                disabled={learning}
+                className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-colors ${
+                  performanceAgent.enabled
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                    : 'bg-slate-950 border-slate-800 text-slate-400'
+                } disabled:opacity-50`}
+              >
+                {performanceAgent.enabled ? 'Actif' : 'Inactif'}
+              </button>
+              <button
+                onClick={refreshLearning}
+                disabled={learning}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-950 border border-slate-800 hover:border-cyan-500/60 text-slate-300 rounded-xl text-[10px] font-black uppercase transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${learning ? 'animate-spin' : ''}`} />
+                Apprendre
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+            <AgentMetric label="Regime" value={performanceAgent.strategyBias.mode} tone={performanceAgent.strategyBias.mode === 'RECOVERY' ? 'rose' : performanceAgent.strategyBias.mode === 'STRICT' ? 'amber' : 'emerald'} />
+            <AgentMetric label="Net R" value={performanceAgent.global.netR.toFixed(2)} tone={performanceAgent.global.netR >= 0 ? 'emerald' : 'rose'} />
+            <AgentMetric label="PF" value={performanceAgent.global.profitFactor.toFixed(2)} tone={performanceAgent.global.profitFactor >= 1.2 ? 'emerald' : 'amber'} />
+            <AgentMetric label="Win Rate" value={`${performanceAgent.global.winRate.toFixed(1)}%`} />
+            <AgentMetric label="DD R" value={performanceAgent.global.maxDrawdownR.toFixed(2)} tone="rose" />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <AgentList title="Actifs bloques" items={performanceAgent.blockedAssets} empty="Aucun blocage actif" tone="rose" />
+            <AgentList title="Actifs favoris" items={performanceAgent.preferredAssets} empty="Pas encore assez d'edge" tone="emerald" />
+          </div>
+        </section>
       )}
 
       <section className="bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-xl">
@@ -342,3 +433,42 @@ const AgentCenter: React.FC = () => {
 };
 
 export default AgentCenter;
+
+const AgentMetric = ({ label, value, tone = 'slate' }: { label: string; value: string; tone?: 'slate' | 'emerald' | 'amber' | 'rose' }) => {
+  const toneClass = {
+    slate: 'text-white',
+    emerald: 'text-emerald-400',
+    amber: 'text-amber-400',
+    rose: 'text-rose-400',
+  }[tone];
+
+  return (
+    <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4">
+      <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">{label}</p>
+      <p className={`text-sm font-black font-mono ${toneClass}`}>{value}</p>
+    </div>
+  );
+};
+
+const AgentList = ({ title, items, empty, tone }: { title: string; items: string[]; empty: string; tone: 'emerald' | 'rose' }) => {
+  const toneClass = tone === 'emerald'
+    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+    : 'bg-rose-500/10 border-rose-500/20 text-rose-300';
+
+  return (
+    <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-4 min-h-28">
+      <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">{title}</p>
+      {items.length === 0 ? (
+        <p className="text-xs text-slate-500">{empty}</p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {items.map((item) => (
+            <span key={item} className={`px-2.5 py-1 rounded-lg border text-[10px] font-black ${toneClass}`}>
+              {item}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};

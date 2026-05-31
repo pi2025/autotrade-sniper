@@ -14,6 +14,7 @@ import type { AgentLimits, AgentMode } from "./types.ts";
 import { ctraderService } from "./services/ctraderService.ts";
 import type { OrderResult } from "./services/ctraderService.ts";
 import { agentController } from "./services/agentController.ts";
+import { performanceAgent } from "./services/performanceAgent.ts";
 import { generateSignalExplanation } from "./services/geminiService.ts";
 import { getCurrenciesFromAsset, checkCurrencyExposure, MAX_CURRENCY_EXPOSURE } from "./services/tradingUtils.ts";
 
@@ -56,6 +57,7 @@ let scanLogs: any[] = [];
 let marketData: Record<string, any> = {};
 let mutedAssets: Record<string, number> = {};
 let activeStrategy = DEFAULT_STRATEGY;
+let effectiveStrategy = DEFAULT_STRATEGY;
 let lastScanTime = 0;
 let lastBatchTimeMs = 0;
 
@@ -127,7 +129,12 @@ async function executeSignalById(idOrPrefix: string): Promise<OrderResult & { si
     }
 
     const accountInfo = await ctraderService.getAccountInfo();
-    const result = await ctraderService.placeOrder(signal, accountInfo.balance, agentController.getPositionSizing());
+    const sizing = agentController.getPositionSizing();
+    const performanceRiskMultiplier = Number((signal as any).performanceRiskMultiplier ?? 1);
+    const result = await ctraderService.placeOrder(signal, accountInfo.balance, {
+      ...sizing,
+      multiplier: sizing.multiplier * performanceRiskMultiplier,
+    });
     if (result.positionId) {
       signal.ctraderPositionId = result.positionId;
       if (supabase) await supabase.from('signals').update({ content: signal }).eq('id', signal.id);
@@ -211,6 +218,9 @@ async function runBackgroundMonitor() {
 
   // Init agent controller (charge mode + limites depuis Supabase)
   await agentController.init(supabase);
+  await performanceAgent.init(supabase, tradeHistory);
+  effectiveStrategy = performanceAgent.adaptStrategy(activeStrategy);
+  console.log(`Agent performance initialise — regime: ${performanceAgent.getState().strategyBias.mode}`);
 
   // Init cTrader si mode != SIGNALS_ONLY. ctraderService route vers demo ou live
   // automatiquement via CTRADER_LIVE='true'|'false'.
@@ -244,6 +254,7 @@ async function runBackgroundMonitor() {
 
     const startTime = Date.now();
     console.log(`[${new Date().toLocaleTimeString()}] Scan en cours...`);
+    effectiveStrategy = performanceAgent.adaptStrategy(activeStrategy);
 
     for (const asset of INITIAL_ASSETS) {
       if (!asset.active) continue;
@@ -253,8 +264,15 @@ async function runBackgroundMonitor() {
       if (cooldownExpiry && Date.now() < cooldownExpiry) continue;
 
       try {
+        const existingBeforeFetch = activeSignals.find(s => s.asset === asset.symbol);
+        const scanDecision = performanceAgent.shouldScanAsset(asset.symbol, Boolean(existingBeforeFetch));
+        if (!scanDecision.allowed) {
+          scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'REJECTED', reason: scanDecision.reason }, ...scanLogs].slice(0, MAX_LOGS);
+          continue;
+        }
+
         const data = await fetchYahooInternal(asset.symbol);
-        const indicators = calculateIndicators(data.history, data.highs, data.lows, data.opens, data.volumes, activeStrategy, asset.symbol);
+        const indicators = calculateIndicators(data.history, data.highs, data.lows, data.opens, data.volumes, effectiveStrategy, asset.symbol);
         
         if (indicators) {
           marketData[asset.symbol] = { ...data, lastIndicators: indicators };
@@ -339,7 +357,7 @@ async function runBackgroundMonitor() {
             }
           } else {
             // --- ANALYSE POUR NOUVEAU SIGNAL ---
-            const { signal: result, diagnostic } = analyzeMarket(asset.symbol, data.price, indicators, activeStrategy);
+            const { signal: result, diagnostic } = analyzeMarket(asset.symbol, data.price, indicators, effectiveStrategy);
             
             if (result) {
               const newSignal: Signal = {
@@ -364,18 +382,37 @@ async function runBackgroundMonitor() {
                 originalStopLoss: result.tradeSetup.stopLoss
               };
 
+              const aiDecision = performanceAgent.assessSignal(newSignal);
+              if (!aiDecision.allowed) {
+                scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'REJECTED', reason: `Agent performance: ${aiDecision.reason}` }, ...scanLogs].slice(0, MAX_LOGS);
+                continue;
+              }
+
+              if (aiDecision.riskMultiplier !== 1) {
+                (newSignal as any).performanceRiskMultiplier = aiDecision.riskMultiplier;
+                newSignal.tradeSetup.riskAmount *= aiDecision.riskMultiplier;
+                newSignal.tradeSetup.positionSizeUnit *= aiDecision.riskMultiplier;
+                newSignal.reasoning = [
+                  ...newSignal.reasoning,
+                  `Agent performance: multiplicateur risque x${aiDecision.riskMultiplier} (${aiDecision.reason})`
+                ];
+              }
+
               const { isAllowed, reason } = checkCurrencyExposure(activeSignals, newSignal, MAX_CURRENCY_EXPOSURE);
               
               if (isAllowed) {
+                const decision = agentController.shouldExecute(newSignal, activeSignals);
                 activeSignals.push(newSignal);
                 scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'SUCCESS', reason: diagnostic }, ...scanLogs].slice(0, MAX_LOGS);
                 if (supabase) await supabase.from('signals').insert({ id: newSignal.id, asset: newSignal.asset, timeframe: '15m', content: newSignal });
 
-                const decision = agentController.shouldExecute(newSignal, activeSignals);
-
                 if (decision.execute && newSignal.assetType !== AssetType.CRYPTO) {
                   const accountInfo = await ctraderService.getAccountInfo();
-                  const result = await ctraderService.placeOrder(newSignal, accountInfo.balance, agentController.getPositionSizing());
+                  const sizing = agentController.getPositionSizing();
+                  const result = await ctraderService.placeOrder(newSignal, accountInfo.balance, {
+                    ...sizing,
+                    multiplier: sizing.multiplier * aiDecision.riskMultiplier,
+                  });
                   if (result.positionId) {
                     newSignal.ctraderPositionId = result.positionId;
                     if (supabase) await supabase.from('signals').update({ content: newSignal }).eq('id', newSignal.id);
@@ -464,6 +501,9 @@ async function runBackgroundMonitor() {
       }
     }
 
+    await performanceAgent.learn(tradeHistory);
+    effectiveStrategy = performanceAgent.adaptStrategy(activeStrategy);
+
     await new Promise(r => setTimeout(r, 5 * 60 * 1000)); // Scan toutes les 5 min
   }
 }
@@ -541,7 +581,7 @@ async function startServer() {
       status: "ok",
       version: "v16.1",
       time: new Date().toISOString(),
-      routes: ["GET /agent/status", "POST /agent/mode", "POST /agent/limits", "POST /agent/emergency-stop"],
+      routes: ["GET /agent/status", "GET /agent/performance", "POST /agent/mode", "POST /agent/limits", "POST /agent/emergency-stop"],
       services: {
         supabase: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY),
         telegram: Boolean(TELEGRAM_TOKEN && TELEGRAM_CHAT_ID),
@@ -576,6 +616,8 @@ async function startServer() {
       lastBatchTimeMs,
       activeCount: activeSignals.length,
       activeStrategyId: activeStrategy.id,
+      effectiveStrategyId: effectiveStrategy.id,
+      performanceRegime: performanceAgent.getState().strategyBias.mode,
       mutedAssets,
       agentMode: toLegacyMode(agentController.getMode()),
       riskLimits: {
@@ -595,6 +637,7 @@ async function startServer() {
     const strategy = STRATEGIES.find(s => s.id === strategyId);
     if (strategy) {
       activeStrategy = strategy;
+      effectiveStrategy = performanceAgent.adaptStrategy(activeStrategy);
       res.json({ success: true, strategyId: activeStrategy.id });
     } else {
       res.status(400).json({ error: "Stratégie invalide" });
@@ -628,7 +671,29 @@ async function startServer() {
       openPositions: activeSignals.filter(s => s.ctraderPositionId).length,
       isRunning: isEngineRunning,
       signalCount: activeSignals.length,
+      performanceAgent: performanceAgent.getState(),
+      activeStrategy: effectiveStrategy,
     });
+  });
+
+  apiRouter.get("/agent/performance", (req, res) => {
+    res.json({
+      state: performanceAgent.getState(),
+      baseStrategy: activeStrategy,
+      effectiveStrategy,
+    });
+  });
+
+  apiRouter.post("/agent/performance/learn", requireAuth, async (req, res) => {
+    const state = await performanceAgent.learn(tradeHistory);
+    effectiveStrategy = performanceAgent.adaptStrategy(activeStrategy);
+    res.json({ success: true, state, effectiveStrategy });
+  });
+
+  apiRouter.post("/agent/performance/enabled", requireAuth, async (req, res) => {
+    await performanceAgent.setEnabled(Boolean(req.body?.enabled));
+    effectiveStrategy = performanceAgent.adaptStrategy(activeStrategy);
+    res.json({ success: true, state: performanceAgent.getState(), effectiveStrategy });
   });
 
   apiRouter.post("/agent/mode", sensitiveRateLimit, requireAuth, async (req, res) => {
