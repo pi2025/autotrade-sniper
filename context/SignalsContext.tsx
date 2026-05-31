@@ -330,12 +330,12 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
       },
       updateEmailConfig: (cfg: EmailConfig) => dispatch({ type: 'UPDATE_EMAIL_CONFIG', payload: cfg }),
       clearMuted: async () => {
+        dispatch({ type: 'CLEAR_MUTED' }); // optimiste — UI réagit immédiatement
         try {
-          const res = await fetch('/api/engine/unmute', {
+          await fetch('/api/engine/unmute', {
             method: 'POST',
             headers: { Authorization: `Bearer ${import.meta.env.VITE_APP_PASSWORD ?? ''}` },
           });
-          if (res.ok) dispatch({ type: 'CLEAR_MUTED' });
         } catch (e) {
           console.error("Erreur clear muted:", e);
         }
