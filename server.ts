@@ -285,7 +285,21 @@ async function runBackgroundMonitor() {
               }
             }
 
-            // 2. Check Sortie (TP/SL) — skip sur le même tick que l'activation du breakeven
+            // 2. Trailing Stop Chandelier — update SL si le chandelier a progressé
+            if (!breakevenJustSet) {
+              const newTrail = isBuy
+                ? Math.max(existing.tradeSetup.stopLoss, chandelier)
+                : Math.min(existing.tradeSetup.stopLoss, chandelier);
+              if (newTrail !== existing.tradeSetup.stopLoss) {
+                existing.tradeSetup.stopLoss = newTrail;
+                if (supabase) await supabase.from('signals').update({ content: existing }).eq('id', existing.id);
+                if (existing.ctraderPositionId) {
+                  await ctraderService.amendSL(existing.ctraderPositionId, newTrail);
+                }
+              }
+            }
+
+            // 3. Check Sortie (TP/SL) — skip sur le même tick que l'activation du breakeven
             const target = existing.tradeSetup.takeProfit;
             const sl = existing.tradeSetup.stopLoss;
             const hitTP = isBuy ? currentPrice >= target : currentPrice <= target;

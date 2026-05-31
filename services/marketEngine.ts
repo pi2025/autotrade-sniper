@@ -125,7 +125,7 @@ const calculateADXValues = (highs: number[], lows: number[], closes: number[], p
 
 const calculateBollingerBands = (closes: number[], period: number = 20, stdDevMultiplier: number = 2, squeezeLookback: number = 100) => {
   const len = closes.length;
-  if (len < period) return { upper: 0, middle: 0, lower: 0, bandwidth: 0, isSqueezing: false };
+  if (len < period) return { upper: 0, middle: 0, lower: 0, bandwidth: 0, isSqueezing: false, wasRecentlySqueezed: false };
 
   const slice = closes.slice(len - period);
   const middle = slice.reduce((a, b) => a + b, 0) / period;
@@ -136,6 +136,8 @@ const calculateBollingerBands = (closes: number[], period: number = 20, stdDevMu
   const bandwidth = middle > 0 ? ((upper - lower) / middle) * 100 : 0;
 
   let isSqueezing = false;
+  let wasRecentlySqueezed = false; // compression dans les 8 dernières bougies → release en cours
+
   if (len >= squeezeLookback + period) {
     const historicalBandwidths: number[] = [];
     for (let i = len - squeezeLookback; i < len; i++) {
@@ -147,12 +149,18 @@ const calculateBollingerBands = (closes: number[], period: number = 20, stdDevMu
         historicalBandwidths.push(histMiddle > 0 ? ((histUpper - histLower) / histMiddle) * 100 : 0);
     }
     const minBandwidth = Math.min(...historicalBandwidths);
-    if (bandwidth <= minBandwidth * 1.15) {
+    const squeezeThreshold = minBandwidth * 1.15;
+    if (bandwidth <= squeezeThreshold) {
         isSqueezing = true;
+    }
+    // Vérifie si l'une des 8 dernières bougies était en compression (release récent)
+    const recentLookback = Math.min(8, historicalBandwidths.length);
+    for (let k = historicalBandwidths.length - recentLookback; k < historicalBandwidths.length; k++) {
+      if (historicalBandwidths[k] <= squeezeThreshold) { wasRecentlySqueezed = true; break; }
     }
   }
 
-  return { upper, middle, lower, bandwidth, isSqueezing };
+  return { upper, middle, lower, bandwidth, isSqueezing, wasRecentlySqueezed };
 };
 
 const calculateRSI = (closes: number[], period: number = 14): number => {
@@ -256,7 +264,9 @@ export const analyzeMarket = (
 
   if (!mtfOk) return { signal: null, diagnostic: "Rejet: Désalignement Temporel M15/H4" };
   if (!isNotChoppy) return { signal: null, diagnostic: `Rejet: Marché trop haché (Choppiness: ${ind.choppiness.toFixed(1)})` };
-  if (!ind.bollingerBands.isSqueezing) return { signal: null, diagnostic: `Rejet: Volatilité explosive (No Squeeze)` };
+  // Accepter: compression actuelle OU release récent (8 dernières bougies)
+  const squeezeOk = ind.bollingerBands.isSqueezing || (ind.bollingerBands as any).wasRecentlySqueezed;
+  if (!squeezeOk) return { signal: null, diagnostic: `Rejet: Pas de compression récente (BW trop large)` };
   if (!isAdxStrong) return { signal: null, diagnostic: `Rejet: ADX ${ind.adx.toFixed(1)} < ${strategy.adxThreshold}` };
   if (!isAdxRising) return { signal: null, diagnostic: "Rejet: Momentum en baisse" };
   if (!isWidening) return { signal: null, diagnostic: "Rejet: Tendance s'essouffle (Fan narrowing)" };
@@ -284,8 +294,8 @@ export const analyzeMarket = (
   const stopLoss = type === SignalType.BUY ? price - atrBuffer : price + atrBuffer;
   const riskDistance = Math.abs(price - stopLoss);
   
-  // V18 Titan: Objectif TP très lointain pour laisser le Trailing Stop (Chandelier) faire le travail.
-  const rrRatio = 10; 
+  // TP réaliste sur M15: 3R minimum. Le Chandelier Trail prend le relais si la tendance continue.
+  const rrRatio = 3;
   const takeProfit = type === SignalType.BUY ? price + (riskDistance * rrRatio) : price - (riskDistance * rrRatio);
   
   let estimatedDuration = "~3-8 Jours";
