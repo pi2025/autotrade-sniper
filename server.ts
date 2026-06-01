@@ -9,6 +9,7 @@ import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
 import { isHighImpactEventSoon } from "./services/economicCalendarService.ts";
 import { testConnection, placeOrder, getAccountBalance, closeOrder, getOpenTrades } from "./services/ctraderService.ts";
+import { performanceAgent } from "./services/performanceAgent.ts";
 import { generateSignalExplanation } from "./services/geminiService.ts";
 import { getUpcomingHighImpactEvents } from "./services/economicCalendarService.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
@@ -358,6 +359,10 @@ async function runBackgroundMonitor() {
     console.warn("📦 Supabase non configuré, démarrage avec état vide.");
   }
 
+  await performanceAgent.init(supabase, tradeHistory);
+  activeStrategy = performanceAgent.adaptStrategy(activeStrategy);
+  console.log(`🧠 Agent performance initialisé — régime: ${performanceAgent.getState().strategyBias.mode}`);
+
   while (true) {
     if (!isEngineRunning) {
       await new Promise(r => setTimeout(r, 5000));
@@ -451,6 +456,11 @@ async function runBackgroundMonitor() {
         if (!asset.active) continue;
         if (ASSET_BLACKLIST.has(asset.symbol)) continue; // MINEUR #9: Skip avant fetch réseau
         if (activeSignals.find(s => s.asset === asset.symbol)) continue; // Skip si trade déjà ouvert
+        const perfScan = performanceAgent.shouldScanAsset(asset.symbol, false);
+        if (!perfScan.allowed) {
+          scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'REJECTED', reason: `Agent performance: ${perfScan.reason}` }, ...scanLogs].slice(0, MAX_LOGS);
+          continue;
+        }
         try {
           const mtf = await fetchMultiTimeframe(asset.symbol);
           multiTFData.set(asset.symbol, mtf);
@@ -622,6 +632,20 @@ async function runBackgroundMonitor() {
             isBreakevenSet: false,
             originalStopLoss: decision.slPrice,
           };
+
+          const perfDecision = performanceAgent.assessSignal(newSignal);
+          if (!perfDecision.allowed) {
+            scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'REJECTED', reason: `Agent performance: ${perfDecision.reason}` }, ...scanLogs].slice(0, MAX_LOGS);
+            continue;
+          }
+          if (perfDecision.riskMultiplier !== 1) {
+            newSignal.tradeSetup.riskAmount *= perfDecision.riskMultiplier;
+            newSignal.tradeSetup.positionSizeUnit *= perfDecision.riskMultiplier;
+            newSignal.reasoning = [
+              ...newSignal.reasoning,
+              `Agent performance: multiplicateur risque x${perfDecision.riskMultiplier} (${perfDecision.reason})`
+            ];
+          }
 
           const { isAllowed, reason } = checkCurrencyExposure(activeSignals, newSignal, MAX_CURRENCY_EXPOSURE);
 
