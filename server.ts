@@ -8,7 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
 import { isHighImpactEventSoon } from "./services/economicCalendarService.ts";
-import { testConnection, placeOrder, getAccountBalance, closeOrder, getOpenTrades } from "./services/ctraderService.ts";
+import { testConnection, placeOrder, getAccountBalance, closeOrder, getOpenTrades, setTokenRefreshedHandler, setRefreshFailedHandler } from "./services/ctraderService.ts";
 import { performanceAgent } from "./services/performanceAgent.ts";
 import { generateSignalExplanation } from "./services/geminiService.ts";
 import { getUpcomingHighImpactEvents } from "./services/economicCalendarService.ts";
@@ -52,6 +52,17 @@ if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
 } else {
   console.error("⚠️ SUPABASE_URL ou SUPABASE_SERVICE_KEY manquant. Supabase désactivé.");
 }
+
+// --- OAUTH2 CTRADER — handlers de refresh token ---
+setTokenRefreshedHandler((newToken) => {
+  console.log("🔄 cTrader token refreshed — persistence Supabase + notification Telegram.");
+  if (supabase) supabase.from('app_config').upsert({ key: 'ctraderAccessToken', value: newToken });
+  sendTelegramMessage("🔄 *cTrader access token renouvelé automatiquement.*\nLe serveur continue sans interruption.").catch(() => {});
+});
+setRefreshFailedHandler((error) => {
+  console.error("🚨 cTrader refresh token ÉCHEC:", error);
+  sendTelegramMessage(`🚨 *cTrader access token EXPIRÉ — rafraîchissement échoué.*\nIntervention manuelle requise.\nErreur: ${error}`).catch(() => {});
+});
 
 // --- ÉTAT DU SERVEUR ---
 let isEngineRunning = true;

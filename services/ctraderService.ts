@@ -49,7 +49,8 @@ import { Signal, AssetType, SignalType } from '../types.ts';
 // --- CONFIGURATION ---
 const CLIENT_ID      = process.env.CTRADER_CLIENT_ID || '';
 const CLIENT_SECRET  = process.env.CTRADER_CLIENT_SECRET || '';
-const ACCESS_TOKEN   = process.env.CTRADER_ACCESS_TOKEN || '';
+let   currentAccessToken = process.env.CTRADER_ACCESS_TOKEN || ''; // mutable pour le refresh
+const REFRESH_TOKEN  = process.env.CTRADER_REFRESH_TOKEN || '';
 const ACCOUNT_ID     = parseInt(process.env.CTRADER_ACCOUNT_ID || '0', 10);
 const IS_LIVE        = process.env.CTRADER_LIVE === 'true';
 const RISK_PERCENT   = parseFloat(process.env.CTRADER_RISK_PERCENT || '1') / 100;
@@ -74,6 +75,45 @@ const PT = {
 // Trade side / Order type (cTrader enums)
 const TRADE_SIDE = { BUY: 1, SELL: 2 } as const;
 const ORDER_TYPE = { MARKET: 1 } as const;
+
+// --- CALLBACKS OAUTH2 (initialisés par server.ts) ---
+let onTokenRefreshed: ((newToken: string) => void) | null = null;
+let onRefreshFailed:  ((error: string)    => void) | null = null;
+
+export function setTokenRefreshedHandler(fn: (newToken: string) => void) { onTokenRefreshed = fn; }
+export function setRefreshFailedHandler (fn: (error: string)    => void) { onRefreshFailed  = fn; }
+
+// Renouvelle l'access token via le refresh token Spotware.
+async function refreshAccessToken(): Promise<void> {
+  if (!REFRESH_TOKEN) {
+    const msg = 'CTRADER_REFRESH_TOKEN manquant — rafraîchissement impossible.';
+    console.error('❌', msg);
+    onRefreshFailed?.(msg);
+    throw new Error(msg);
+  }
+  console.log('🔄 cTrader access token expiré — renouvellement via refresh token...');
+  const body = new URLSearchParams({
+    grant_type:    'refresh_token',
+    refresh_token: REFRESH_TOKEN,
+    client_id:     CLIENT_ID,
+    client_secret: CLIENT_SECRET,
+  });
+  const res = await fetch('https://connect.spotware.com/apps/token', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    body.toString(),
+  });
+  const data: any = await res.json();
+  if (!res.ok || !data.accessToken) {
+    const msg = `Échec du refresh token: ${JSON.stringify(data)}`;
+    console.error('❌', msg);
+    onRefreshFailed?.(msg);
+    throw new Error(msg);
+  }
+  currentAccessToken = data.accessToken;
+  console.log('✅ cTrader access token renouvelé automatiquement.');
+  onTokenRefreshed?.(data.accessToken);
+}
 
 // --- MAPPING Yahoo Finance → nom de symbole cTrader (IC Markets) ---
 const SYMBOL_MAP: Record<string, string> = {
@@ -155,7 +195,7 @@ let isAuthenticated = false;
 async function ensureConnection(): Promise<void> {
   if (isAuthenticated && connection) return;
 
-  if (!CLIENT_ID || !CLIENT_SECRET || !ACCESS_TOKEN || !ACCOUNT_ID) {
+  if (!CLIENT_ID || !CLIENT_SECRET || !currentAccessToken || !ACCOUNT_ID) {
     throw new Error('Variables CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET, CTRADER_ACCESS_TOKEN ou CTRADER_ACCOUNT_ID manquantes.');
   }
 
@@ -171,11 +211,23 @@ async function ensureConnection(): Promise<void> {
     clientSecret: CLIENT_SECRET,
   });
 
-  // Étape 2 — Authentification du compte de trading
-  await connection.sendCommand(PT.ACCOUNT_AUTH_REQ, {
-    ctidTraderAccountId: ACCOUNT_ID,
-    accessToken: ACCESS_TOKEN,
-  });
+  // Étape 2 — Authentification du compte de trading (avec refresh automatique si token expiré)
+  try {
+    await connection.sendCommand(PT.ACCOUNT_AUTH_REQ, {
+      ctidTraderAccountId: ACCOUNT_ID,
+      accessToken: currentAccessToken,
+    });
+  } catch (e: any) {
+    if (e?.errorCode === 'CH_ACCESS_TOKEN_INVALID' || e?.description?.includes('expired')) {
+      await refreshAccessToken(); // met à jour currentAccessToken
+      await connection.sendCommand(PT.ACCOUNT_AUTH_REQ, {
+        ctidTraderAccountId: ACCOUNT_ID,
+        accessToken: currentAccessToken,
+      });
+    } else {
+      throw e;
+    }
+  }
 
   // Étape 3 — Charger la liste des symboles pour le mapping symbolName → symbolId
   const symbolsRes: any = await connection.sendCommand(PT.SYMBOLS_LIST_REQ, {
@@ -315,7 +367,7 @@ function priceToDouble(price: number): number {
  * Vérifie que les credentials sont valides et retourne le statut de connexion.
  */
 export async function testConnection(): Promise<OandaConnectionStatus> {
-  if (!CLIENT_ID || !CLIENT_SECRET || !ACCESS_TOKEN || !ACCOUNT_ID) {
+  if (!CLIENT_ID || !CLIENT_SECRET || !currentAccessToken || !ACCOUNT_ID) {
     return {
       connected: false,
       mode: IS_LIVE ? 'LIVE' : 'DEMO',
