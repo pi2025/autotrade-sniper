@@ -1,441 +1,504 @@
-import tls from 'tls';
-import { Signal, SignalType, AssetType, AgentPositionSizing } from '../types.ts';
-import { DEFAULT_POSITION_SIZING } from './agentController.ts';
 
+/**
+ * cTrader Open API Service pour AutoTrade Sniper V15
+ *
+ * Utilise @reiryoku/ctrader-layer comme couche de transport Protobuf.
+ * Interface identique à oandaService.ts → swap en une seule ligne d'import dans server.ts.
+ *
+ * Prérequis :
+ *   npm install @reiryoku/ctrader-layer
+ *
+ * Variables d'environnement requises :
+ *   CTRADER_CLIENT_ID       — Client ID depuis open.ctrader.com
+ *   CTRADER_CLIENT_SECRET   — Client Secret depuis open.ctrader.com
+ *   CTRADER_ACCESS_TOKEN    — Access Token OAuth (obtenu via navigateur, ~30 jours)
+ *   CTRADER_ACCOUNT_ID      — ctidTraderAccountId (ex: 9932624)
+ *   CTRADER_LIVE=false      — true = compte réel, false = demo (défaut)
+ *   CTRADER_RISK_PERCENT=1  — % du solde risqué par trade (défaut: 1%)
+ *
+ * Comment obtenir Client ID / Client Secret :
+ *   1. Aller sur https://open.ctrader.com → S'inscrire / Se connecter
+ *   2. "Applications" → "New Application"
+ *   3. Remplir : nom, description, redirect URI (ex: http://localhost:3000/callback)
+ *   4. Soumettre → attendre l'approbation Spotware (~24-48h)
+ *   5. Une fois approuvé : copier Client ID et Client Secret
+ *
+ * Comment obtenir l'Access Token :
+ *   1. Ouvrir dans un navigateur :
+ *      https://connect.spotware.com/apps/auth?client_id=YOUR_CLIENT_ID
+ *        &redirect_uri=http://localhost:3000/callback
+ *        &scope=trading
+ *   2. S'authentifier avec le compte cTrader (IC Markets demo)
+ *   3. Autoriser l'application
+ *   4. Le navigateur redirige vers :
+ *      http://localhost:3000/callback?code=AUTHORIZATION_CODE
+ *   5. Échanger le code contre un token :
+ *      POST https://connect.spotware.com/apps/token
+ *        grant_type=authorization_code
+ *        &code=AUTHORIZATION_CODE
+ *        &client_id=YOUR_CLIENT_ID
+ *        &client_secret=YOUR_CLIENT_SECRET
+ *        &redirect_uri=http://localhost:3000/callback
+ *   6. Réponse JSON contient accessToken (~30 jours) et refreshToken (permanent)
+ *   7. Stocker accessToken dans .env comme CTRADER_ACCESS_TOKEN
+ */
+
+import { CTraderConnection } from "@reiryoku/ctrader-layer";
+import { Signal, AssetType, SignalType } from '../types.ts';
+
+// --- CONFIGURATION ---
+const CLIENT_ID      = process.env.CTRADER_CLIENT_ID || '';
+const CLIENT_SECRET  = process.env.CTRADER_CLIENT_SECRET || '';
+const ACCESS_TOKEN   = process.env.CTRADER_ACCESS_TOKEN || '';
+const ACCOUNT_ID     = parseInt(process.env.CTRADER_ACCOUNT_ID || '0', 10);
+const IS_LIVE        = process.env.CTRADER_LIVE === 'true';
+const RISK_PERCENT   = parseFloat(process.env.CTRADER_RISK_PERCENT || '1') / 100;
+
+const HOST = IS_LIVE ? 'live.ctraderapi.com' : 'demo.ctraderapi.com';
+const PORT = 5035; // Protobuf over TLS
+
+// --- PAYLOAD TYPE NAMES (cTrader Open API 2.0) ---
+// La lib @reiryoku/ctrader-layer v2 exige des noms string, pas des IDs numériques
 const PT = {
-  HEARTBEAT: 51,
-  APP_AUTH_REQ: 2100,
-  APP_AUTH_RES: 2101,
-  ACC_AUTH_REQ: 2102,
-  ACC_AUTH_RES: 2103,
-  NEW_ORDER_REQ: 2106,
-  AMEND_SL_REQ: 2109,
-  CLOSE_POS_REQ: 2111,
-  SYMBOLS_LIST_REQ: 2114,
-  SYMBOLS_LIST_RES: 2115,
-  TRADER_REQ: 2121,
-  TRADER_RES: 2122,
-  RECONCILE_REQ: 2124,
-  RECONCILE_RES: 2125,
-  EXECUTION_EVT: 2126,
-  ERROR_RES: 2142,
-  ACCOUNT_LIST_REQ: 2149,
-  ACCOUNT_LIST_RES: 2150,
+  HEARTBEAT:           'ProtoHeartbeatEvent',
+  APP_AUTH_REQ:        'ProtoOAApplicationAuthReq',
+  ACCOUNT_AUTH_REQ:    'ProtoOAAccountAuthReq',
+  NEW_ORDER_REQ:       'ProtoOANewOrderReq',
+  EXECUTION_EVENT:     'ProtoOAExecutionEvent',       // 2126 (pas 2107)
+  CLOSE_POSITION_REQ:  'ProtoOAClosePositionReq',
+  SYMBOLS_LIST_REQ:    'ProtoOASymbolsListReq',
+  RECONCILE_REQ:       'ProtoOAReconcileReq',         // 2124 (pas 2122)
+  TRADER_REQ:          'ProtoOATraderReq',             // 2121 (pas 2149)
 } as const;
 
+// Trade side / Order type (cTrader enums)
+const TRADE_SIDE = { BUY: 1, SELL: 2 } as const;
+const ORDER_TYPE = { MARKET: 1 } as const;
+
+// --- MAPPING Yahoo Finance → nom de symbole cTrader (IC Markets) ---
 const SYMBOL_MAP: Record<string, string> = {
-  'EURUSD=X': 'EURUSD', 'GBPUSD=X': 'GBPUSD', 'USDJPY=X': 'USDJPY',
-  'AUDUSD=X': 'AUDUSD', 'USDCAD=X': 'USDCAD', 'USDCHF=X': 'USDCHF',
-  'NZDUSD=X': 'NZDUSD', 'EURGBP=X': 'EURGBP', 'EURJPY=X': 'EURJPY',
-  'GBPJPY=X': 'GBPJPY', 'AUDJPY=X': 'AUDJPY', 'CHFJPY=X': 'CHFJPY',
-  'EURNZD=X': 'EURNZD', 'GBPAUD=X': 'GBPAUD', 'CADJPY=X': 'CADJPY',
-  'EURCHF=X': 'EURCHF', 'EURAUD=X': 'EURAUD',
-  'GC=F': 'XAUUSD', 'SI=F': 'XAGUSD', 'CL=F': 'USOIL',
-  'BTC-USD': 'BTCUSD', 'ETH-USD': 'ETHUSD', 'SOL-USD': 'SOLUSD',
-  'BNB-USD': 'BNBUSD', 'XRP-USD': 'XRPUSD',
-  '^GSPC': 'SP500', '^IXIC': 'NAS100', '^FCHI': 'FRA40',
+  // Forex - Majors
+  'EURUSD=X': 'EURUSD',
+  'GBPUSD=X': 'GBPUSD',
+  'USDJPY=X': 'USDJPY',
+  'AUDUSD=X': 'AUDUSD',
+  'USDCAD=X': 'USDCAD',
+  'USDCHF=X': 'USDCHF',
+  'NZDUSD=X': 'NZDUSD',
+  // Forex - Crosses
+  'EURGBP=X': 'EURGBP',
+  'EURJPY=X': 'EURJPY',
+  'EURAUD=X': 'EURAUD',
+  'EURCHF=X': 'EURCHF',
+  'GBPJPY=X': 'GBPJPY',
+  'AUDJPY=X': 'AUDJPY',
+  'CHFJPY=X': 'CHFJPY',
+  'EURNZD=X': 'EURNZD',
+  'GBPAUD=X': 'GBPAUD',
+  'CADJPY=X': 'CADJPY',
+  // Crypto (IC Markets cTrader)
+  'BTC-USD':  'BTCUSD',
+  'ETH-USD':  'ETHUSD',
+  'SOL-USD':  'SOLUSD',
+  'BNB-USD':  'BNBUSD',
+  'XRP-USD':  'XRPUSD',
+  // Matières premières
+  'GC=F':     'XAUUSD',
+  'SI=F':     'XAGUSD',
+  'CL=F':     'XTIUSD',   // WTI Crude Oil sur IC Markets cTrader
+  // Indices
+  '^GSPC':    'US500',     // S&P 500
+  '^IXIC':    'USTEC',     // NASDAQ
+  '^FCHI':    'FRA40',     // CAC 40
 };
 
-const USD_BASE = new Set(['USDJPY', 'USDCAD', 'USDCHF']);
-
-export interface OrderResult {
-  positionId?: string;
+// --- TYPES INTERNES (identiques à oandaService pour compatibilité) ---
+export interface OandaConnectionStatus {
+  connected: boolean;
+  mode: 'DEMO' | 'LIVE';
+  accountId: string | null;
+  balance?: number;
+  currency?: string;
   error?: string;
-  alreadyClosed?: boolean;
 }
 
-export interface AccountInfo {
-  balance: number;
-  equity: number;
+export interface OandaOrderResult {
+  success: boolean;
+  tradeId?: string;
+  instrument?: string;
+  units?: number;
+  error?: string;
 }
 
-interface JsonMessage {
-  payloadType: number;
-  clientMsgId?: string;
-  payload?: any;
+export interface OandaOpenTrade {
+  tradeId: string;
+  instrument: string;
+  units: number;
+  openPrice: number;
+  unrealizedPnl: number;
+  openedAt: string;
 }
 
-class CTraderService {
-  private socket: tls.TLSSocket | null = null;
-  private pendingCallbacks = new Map<string, (msg: JsonMessage) => void>();
-  private pendingByPayloadType = new Map<number, (msg: JsonMessage) => void>();
-  private reconnectDelay = 1000;
-  private heartbeatInterval: NodeJS.Timeout | null = null;
-  private authenticated = false;
-  private receiveBuffer = '';
-  private symbolIds = new Map<string, number>();
+// --- ÉTAT DE CONNEXION ---
+let connection: CTraderConnection | null = null;
+let symbolIdMap = new Map<string, number>(); // symbolName → symbolId
+let symbolNameMap = new Map<number, string>(); // symbolId → symbolName
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let isAuthenticated = false;
 
-  private get tlsHost() {
-    return process.env.CTRADER_LIVE === 'true'
-      ? 'live.ctraderapi.com'
-      : 'demo.ctraderapi.com';
+// --- GESTION DE CONNEXION ---
+
+/**
+ * Établit la connexion cTrader et authentifie l'application + le compte.
+ * Idempotent : ne reconnecte pas si déjà authentifié.
+ */
+async function ensureConnection(): Promise<void> {
+  if (isAuthenticated && connection) return;
+
+  if (!CLIENT_ID || !CLIENT_SECRET || !ACCESS_TOKEN || !ACCOUNT_ID) {
+    throw new Error('Variables CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET, CTRADER_ACCESS_TOKEN ou CTRADER_ACCOUNT_ID manquantes.');
   }
 
-  private get accountId(): number {
-    return parseInt(process.env.CTRADER_ACCOUNT_ID || '0', 10);
+  // Nettoyer toute connexion précédente
+  disconnect();
+
+  connection = new CTraderConnection({ host: HOST, port: PORT });
+  await connection.open();
+
+  // Étape 1 — Authentification de l'application
+  await connection.sendCommand(PT.APP_AUTH_REQ, {
+    clientId: CLIENT_ID,
+    clientSecret: CLIENT_SECRET,
+  });
+
+  // Étape 2 — Authentification du compte de trading
+  await connection.sendCommand(PT.ACCOUNT_AUTH_REQ, {
+    ctidTraderAccountId: ACCOUNT_ID,
+    accessToken: ACCESS_TOKEN,
+  });
+
+  // Étape 3 — Charger la liste des symboles pour le mapping symbolName → symbolId
+  const symbolsRes: any = await connection.sendCommand(PT.SYMBOLS_LIST_REQ, {
+    ctidTraderAccountId: ACCOUNT_ID,
+  });
+
+  symbolIdMap.clear();
+  symbolNameMap.clear();
+  for (const sym of (symbolsRes.symbol ?? [])) {
+    if (sym.symbolName && sym.symbolId) {
+      symbolIdMap.set(sym.symbolName, sym.symbolId);
+      symbolNameMap.set(sym.symbolId, sym.symbolName);
+    }
   }
 
-  async init(): Promise<void> {
-    if (this.authenticated && this.socket && !this.socket.destroyed) return;
-    await this.connect();
+  console.log(`✅ cTrader connecté — ${symbolIdMap.size} symboles chargés (${IS_LIVE ? 'LIVE' : 'DEMO'})`);
+
+  // Heartbeat toutes les 10s (cTrader coupe après ~30s d'inactivité)
+  heartbeatTimer = setInterval(() => {
+    connection?.sendCommand(PT.HEARTBEAT, {}).catch(() => {});
+  }, 10_000);
+
+  isAuthenticated = true;
+}
+
+function disconnect() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  connection = null;
+  isAuthenticated = false;
+}
+
+/**
+ * Résout un symbole Yahoo en symbolId cTrader.
+ */
+function resolveSymbolId(yahooSymbol: string): number | null {
+  const ctraderName = SYMBOL_MAP[yahooSymbol];
+  if (!ctraderName) return null;
+  return symbolIdMap.get(ctraderName) ?? null;
+}
+
+/**
+ * Calcule le volume cTrader (en unités de base currency) pour respecter le risque cible.
+ *
+ * Volume cTrader = base currency units :
+ *   - 100000 = 1.00 lot standard
+ *   -  10000 = 0.10 lot mini
+ *   -   1000 = 0.01 lot micro (minimum IC Markets)
+ *
+ * Logique de sizing identique à oandaService :
+ *   - Forex USD-quoté : volume = riskAmount / slDistance
+ *   - Forex USD-base  : volume = (riskAmount * price) / slDistance
+ *   - Indices / Matières premières : arrondi entier
+ *
+ * Arrondi au pas de 1000 (0.01 lot minimum).
+ * Plafond de sécurité : 100 000 (1 lot standard max).
+ */
+function calculateVolume(signal: Signal, balance: number): number {
+  const riskAmount = balance * RISK_PERCENT;
+  const slDistance = Math.abs(signal.priceAtSignal - signal.tradeSetup.stopLoss);
+  if (slDistance === 0) return 0;
+
+  const ctraderName = SYMBOL_MAP[signal.asset] ?? '';
+  const isUsdBase = ['USDJPY', 'USDCAD', 'USDCHF'].includes(ctraderName);
+
+  // Valeur d'un pip/point par unité selon le type d'actif
+  // cTrader volume = unités de base currency (100000 = 1 lot forex)
+  // Pour les matières premières et indices, 1 unité = valeur du contrat
+  const isCommodity = ['XAUUSD', 'XAGUSD', 'XTIUSD'].includes(ctraderName);
+  const isIndex = ['US500', 'USTEC', 'FRA40'].includes(ctraderName);
+  const isCrypto = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'BNBUSD', 'XRPUSD'].includes(ctraderName);
+
+  let rawVolume: number;
+
+  if (isCommodity) {
+    // Commodités : volume en unités (ex: 100 unités XAGUSD = 100 oz d'argent)
+    // PnL = volume * slDistance, donc volume = riskAmount / slDistance
+    rawVolume = riskAmount / slDistance;
+    // cTrader commodités : volume en centièmes d'unité (100 = 1 unité)
+    rawVolume = rawVolume * 100;
+  } else if (isIndex) {
+    // Indices : volume = riskAmount / slDistance (en points)
+    // cTrader indices : volume en centièmes (100 = 1 contrat)
+    rawVolume = (riskAmount / slDistance) * 100;
+  } else if (isCrypto) {
+    // Sécurité: le multiplicateur crypto dépend des specs broker cTrader.
+    // L'exécution crypto est bloquée dans placeOrder tant que ces specs ne sont pas validées.
+    return 0;
+  } else if (isUsdBase) {
+    rawVolume = (riskAmount * signal.priceAtSignal) / slDistance;
+  } else {
+    rawVolume = riskAmount / slDistance;
   }
 
-  private connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.receiveBuffer = '';
-      this.socket = tls.connect({ host: this.tlsHost, port: 5036, rejectUnauthorized: false });
+  // Pas d'arrondi et minimum selon le type d'actif
+  let step: number;
+  let minVolume: number;
+  let maxVolume: number;
 
-      const failOnce = (err: any) => {
-        this.socket?.removeListener('error', failOnce);
-        reject(err);
-      };
+  if (isCommodity || isIndex) {
+    step = 100;        // 0.01 contrat minimum
+    minVolume = 100;   // 0.01 contrat
+    maxVolume = 10000; // 100 contrats max
+  } else if (isCrypto) {
+    step = 1000000;           // 0.01 unité
+    minVolume = 1000000;      // 0.01 unité minimum
+    maxVolume = 100000000000; // 1000 unités max
+  } else {
+    step = 1000;       // 0.01 lot forex
+    minVolume = 1000;  // 0.01 lot minimum
+    maxVolume = 100000; // 1 lot standard max
+  }
 
-      this.socket.on('secureConnect', async () => {
-        console.log(`✅ cTrader JSON/TLS connecté à ${this.tlsHost}:5036`);
-        this.reconnectDelay = 1000;
-        this.socket?.removeListener('error', failOnce);
-        try {
-          await this.applicationAuth();
-          await this.accountAuth();
-          await this.loadSymbols();
-          this.startHeartbeat();
-          this.authenticated = true;
-          resolve();
-        } catch (e) {
-          this.socket?.destroy();
-          reject(e);
-        }
-      });
+  let volume = Math.floor(rawVolume / step) * step;
 
-      this.socket.on('data', (chunk: Buffer) => this.handleData(chunk.toString('utf8')));
+  // Garantir le volume minimum si rawVolume > 0
+  if (volume < minVolume && rawVolume > 0) {
+    volume = minVolume;
+  }
 
-      this.socket.on('close', () => {
-        const shouldReconnect = this.authenticated;
-        this.authenticated = false;
-        if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
-        this.heartbeatInterval = null;
-        if (!shouldReconnect) return;
+  return Math.min(volume, maxVolume);
+}
 
-        console.warn('⚠️ cTrader déconnecté. Reconnexion dans', this.reconnectDelay, 'ms');
-        setTimeout(() => {
-          this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000);
-          this.connect().catch(console.error);
-        }, this.reconnectDelay);
-      });
+/**
+ * Convertit un prix en nombre entier × 10^digits pour les champs SL/TP cTrader.
+ * cTrader accepte aussi les prix en double — on garde le double pour la simplicité.
+ */
+function priceToDouble(price: number): number {
+  return price;
+}
 
-      this.socket.on('error', failOnce);
-      this.socket.on('error', (err) => {
-        console.error('❌ cTrader socket error:', err.message);
-      });
+// --- FONCTIONS PUBLIQUES (même interface que oandaService) ---
+
+/**
+ * Vérifie que les credentials sont valides et retourne le statut de connexion.
+ */
+export async function testConnection(): Promise<OandaConnectionStatus> {
+  if (!CLIENT_ID || !CLIENT_SECRET || !ACCESS_TOKEN || !ACCOUNT_ID) {
+    return {
+      connected: false,
+      mode: IS_LIVE ? 'LIVE' : 'DEMO',
+      accountId: ACCOUNT_ID ? ACCOUNT_ID.toString() : null,
+      error: 'Variables CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET, CTRADER_ACCESS_TOKEN ou CTRADER_ACCOUNT_ID manquantes.',
+    };
+  }
+
+  try {
+    await ensureConnection();
+
+    const traderRes: any = await connection!.sendCommand(PT.TRADER_REQ, {
+      ctidTraderAccountId: ACCOUNT_ID,
     });
+
+    const trader = traderRes.trader ?? {};
+    return {
+      connected: true,
+      mode: IS_LIVE ? 'LIVE' : 'DEMO',
+      accountId: ACCOUNT_ID.toString(),
+      balance: (trader.balance ?? 0) / 100, // cTrader stocke en cents
+      currency: trader.depositAssetId ? 'USD' : 'USD', // On fixe USD pour le compte demo IC Markets
+    };
+  } catch (err: any) {
+    disconnect();
+    return {
+      connected: false,
+      mode: IS_LIVE ? 'LIVE' : 'DEMO',
+      accountId: ACCOUNT_ID.toString(),
+      error: err.message,
+    };
   }
+}
 
-  private handleData(text: string): void {
-    this.receiveBuffer += text;
+/**
+ * Retourne le solde actuel du compte.
+ */
+export async function getAccountBalance(): Promise<{ balance: number; currency: string } | null> {
+  try {
+    await ensureConnection();
 
-    while (this.receiveBuffer.trimStart().startsWith('{')) {
-      const parsed = this.extractJsonObject(this.receiveBuffer);
-      if (!parsed) return;
-      this.receiveBuffer = parsed.rest;
-      this.handleMessage(parsed.message);
-    }
-  }
+    const traderRes: any = await connection!.sendCommand(PT.TRADER_REQ, {
+      ctidTraderAccountId: ACCOUNT_ID,
+    });
 
-  private extractJsonObject(input: string): { message: JsonMessage; rest: string } | null {
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    const start = input.search(/\S/);
-    if (start < 0) return null;
-
-    for (let i = start; i < input.length; i++) {
-      const char = input[i];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (char === '\\') escaped = true;
-        else if (char === '"') inString = false;
-        continue;
-      }
-      if (char === '"') inString = true;
-      else if (char === '{') depth++;
-      else if (char === '}') {
-        depth--;
-        if (depth === 0) {
-          return {
-            message: JSON.parse(input.slice(start, i + 1)),
-            rest: input.slice(i + 1),
-          };
-        }
-      }
-    }
+    const trader = traderRes.trader ?? {};
+    return {
+      balance: (trader.balance ?? 0) / 100, // cents → USD
+      currency: 'USD',
+    };
+  } catch (err: any) {
+    console.error('cTrader getAccountBalance failed:', err.message);
+    disconnect();
     return null;
   }
+}
 
-  private handleMessage(msg: JsonMessage): void {
-    console.log(`📨 cTrader ← payloadType=${msg.payloadType} clientMsgId=${msg.clientMsgId ?? '-'}`);
-
-    const clientMsgId = msg.clientMsgId;
-    if (clientMsgId && this.pendingCallbacks.has(clientMsgId)) {
-      const cb = this.pendingCallbacks.get(clientMsgId)!;
-      this.pendingCallbacks.delete(clientMsgId);
-      cb(msg);
-      return;
-    }
-
-    if (this.pendingByPayloadType.has(msg.payloadType)) {
-      const cb = this.pendingByPayloadType.get(msg.payloadType)!;
-      this.pendingByPayloadType.delete(msg.payloadType);
-      cb(msg);
-    }
+/**
+ * Place un Market Order sur cTrader à partir d'un Signal V15.
+ * Calcule automatiquement le volume (position sizing basé sur le risque).
+ */
+export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
+  try {
+    await ensureConnection();
+  } catch (err: any) {
+    return { success: false, error: `Connexion cTrader échouée: ${err.message}` };
   }
 
-  private send(payloadType: number, payload: object, clientMsgId?: string): void {
-    if (!this.socket || this.socket.destroyed) throw new Error('cTrader socket non connecté');
-
-    const msg = JSON.stringify({
-      payloadType,
-      ...(clientMsgId ? { clientMsgId } : {}),
-      ...(Object.keys(payload).length ? { payload } : {}),
-    });
-    console.log(`📤 cTrader → payloadType=${payloadType} clientMsgId=${clientMsgId ?? '-'}`);
-    this.socket.write(msg);
+  if (signal.assetType !== AssetType.FOREX) {
+    return {
+      success: false,
+      error: `Exécution cTrader bloquée pour ${signal.asset}: seuls les signaux FOREX sont autorisés tant que les tailles crypto/indices/commodités ne sont pas validées par symbole.`,
+    };
   }
 
-  private waitForResponse(clientMsgId: string, expectedPayloadType?: number, timeoutMs = 8000): Promise<JsonMessage> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingCallbacks.delete(clientMsgId);
-        if (expectedPayloadType) this.pendingByPayloadType.delete(expectedPayloadType);
-        reject(new Error(`cTrader timeout: ${clientMsgId}`));
-      }, timeoutMs);
-
-      const handler = (msg: JsonMessage) => {
-        clearTimeout(timer);
-        this.pendingCallbacks.delete(clientMsgId);
-        if (expectedPayloadType) this.pendingByPayloadType.delete(expectedPayloadType);
-
-        if (msg.payloadType === PT.ERROR_RES) {
-          const code = msg.payload?.errorCode ?? 'UNKNOWN_ERROR';
-          const description = msg.payload?.description ? `: ${msg.payload.description}` : '';
-          reject(new Error(`${code}${description}`));
-          return;
-        }
-        resolve(msg);
-      };
-
-      this.pendingCallbacks.set(clientMsgId, handler);
-      if (expectedPayloadType) this.pendingByPayloadType.set(expectedPayloadType, handler);
-    });
+  const symbolId = resolveSymbolId(signal.asset);
+  if (!symbolId) {
+    return { success: false, error: `Symbole non supporté sur cTrader: ${signal.asset}` };
   }
 
-  private async applicationAuth(): Promise<void> {
-    const msgId = 'app_auth';
-    const responsePromise = this.waitForResponse(msgId, PT.APP_AUTH_RES);
-    this.send(PT.APP_AUTH_REQ, {
-      clientId: process.env.CTRADER_CLIENT_ID,
-      clientSecret: process.env.CTRADER_CLIENT_SECRET,
-    }, msgId);
-    await responsePromise;
-    console.log('✅ cTrader Application Auth OK');
+  const acc = await getAccountBalance();
+  if (!acc) {
+    return { success: false, error: 'Impossible de récupérer le solde du compte.' };
   }
 
-  private async accountAuth(): Promise<void> {
-    const msgId = 'acc_auth';
-    const responsePromise = this.waitForResponse(msgId, PT.ACC_AUTH_RES);
-    this.send(PT.ACC_AUTH_REQ, {
-      accessToken: process.env.CTRADER_ACCESS_TOKEN,
-      ctidTraderAccountId: this.accountId,
-    }, msgId);
-    await responsePromise;
-    console.log(`✅ cTrader Account Auth OK — compte ${this.accountId}`);
+  const volume = calculateVolume(signal, acc.balance);
+  if (volume === 0) {
+    return { success: false, error: 'Volume calculé à 0 (SL trop proche ou solde insuffisant).' };
   }
 
-  private async loadSymbols(): Promise<void> {
-    const msgId = `symbols_${Date.now()}`;
-    const responsePromise = this.waitForResponse(msgId, PT.SYMBOLS_LIST_RES);
-    this.send(PT.SYMBOLS_LIST_REQ, {
-      ctidTraderAccountId: this.accountId,
-      includeArchivedSymbols: false,
-    }, msgId);
+  const tradeSide = signal.type === SignalType.BUY ? TRADE_SIDE.BUY : TRADE_SIDE.SELL;
+  const ctraderName = SYMBOL_MAP[signal.asset] ?? signal.asset;
 
-    const res = await responsePromise;
-    const symbols = res.payload?.symbol ?? res.payload?.lightSymbol ?? [];
-    this.symbolIds.clear();
-    for (const symbol of symbols) {
-      if (symbol.symbolName && symbol.symbolId) {
-        this.symbolIds.set(symbol.symbolName, Number(symbol.symbolId));
-      }
-    }
-    console.log(`✅ cTrader symboles chargés: ${this.symbolIds.size}`);
-  }
-
-  private startHeartbeat(): void {
-    this.heartbeatInterval = setInterval(() => {
-      try {
-        this.send(PT.HEARTBEAT, {});
-      } catch (e) {
-        console.error('Heartbeat cTrader échoué:', e);
-      }
-    }, 10000);
-  }
-
-  private getAssetMultiplier(signal: Signal, sizing: AgentPositionSizing): number {
-    if (signal.assetType === AssetType.FOREX) return sizing.forexMultiplier;
-    if (signal.assetType === AssetType.CRYPTO) return sizing.cryptoMultiplier;
-    if (signal.assetType === AssetType.COMMODITY) return sizing.commodityMultiplier;
-    if (signal.assetType === AssetType.INDEX) return sizing.indexMultiplier;
-    if (signal.assetType === AssetType.STOCK) return sizing.stockMultiplier;
-    return 1;
-  }
-
-  private calculateRiskAmount(signal: Signal, balance: number, sizing: AgentPositionSizing): number {
-    const multiplier = Math.max(0, sizing.multiplier) * Math.max(0, this.getAssetMultiplier(signal, sizing));
-    if (sizing.mode === 'FIXED_AMOUNT') return Math.max(0, sizing.fixedAmount) * multiplier;
-    if (sizing.mode === 'FIXED_LOT') return 0;
-    return balance * (Math.max(0, sizing.riskPercent) / 100) * multiplier;
-  }
-
-  private calculateVolume(signal: Signal, balance: number, symbolName: string, rawSizing?: Partial<AgentPositionSizing>): number {
-    const sizing: AgentPositionSizing = { ...DEFAULT_POSITION_SIZING, ...(rawSizing ?? {}) };
-
-    if (sizing.mode === 'FIXED_LOT') {
-      const lots = Math.max(0, sizing.fixedLot)
-        * Math.max(0, sizing.multiplier)
-        * Math.max(0, this.getAssetMultiplier(signal, sizing));
-      const units = lots * 100000;
-      const boundedUnits = Math.max(sizing.minVolumeUnits, Math.min(units, sizing.maxVolumeUnits));
-      return Math.round(boundedUnits * 100);
-    }
-
-    const riskAmount = this.calculateRiskAmount(signal, balance, sizing);
-    const slDistance = Math.abs(signal.priceAtSignal - signal.tradeSetup.stopLoss);
-    if (slDistance === 0) return 0;
-
-    let baseUnits: number;
-    if (USD_BASE.has(symbolName)) {
-      baseUnits = (riskAmount * signal.priceAtSignal) / slDistance;
-    } else {
-      baseUnits = riskAmount / slDistance;
-    }
-
-    const boundedUnits = Math.max(sizing.minVolumeUnits, Math.min(baseUnits, sizing.maxVolumeUnits));
-    return Math.round(boundedUnits * 100);
-  }
-
-  async placeOrder(signal: Signal, balance: number, positionSizing?: Partial<AgentPositionSizing>): Promise<OrderResult> {
-    if (!this.authenticated) return { error: 'cTrader non authentifié' };
-
-    const symbolName = SYMBOL_MAP[signal.asset];
-    if (!symbolName) return { error: `Symbole non supporté: ${signal.asset}` };
-
-    const symbolId = this.symbolIds.get(symbolName);
-    if (!symbolId) return { error: `SymbolId introuvable pour ${symbolName}` };
-
-    const volume = this.calculateVolume(signal, balance, symbolName, positionSizing);
-    if (volume === 0) return { error: 'Volume calculé à 0' };
-
-    const msgId = `order_${Date.now()}`;
-    const responsePromise = this.waitForResponse(msgId, PT.EXECUTION_EVT);
-
-    this.send(PT.NEW_ORDER_REQ, {
-      ctidTraderAccountId: this.accountId,
+  try {
+    const res: any = await connection!.sendCommand(PT.NEW_ORDER_REQ, {
+      ctidTraderAccountId: ACCOUNT_ID,
       symbolId,
-      orderType: 1,
-      tradeSide: signal.type === SignalType.BUY ? 1 : 2,
+      orderType: ORDER_TYPE.MARKET,
+      tradeSide,
       volume,
-      stopLoss: signal.tradeSetup.stopLoss,
-      takeProfit: signal.tradeSetup.takeProfit,
-    }, msgId);
+      stopLoss: priceToDouble(signal.tradeSetup.stopLoss),
+      takeProfit: priceToDouble(signal.tradeSetup.takeProfit),
+    });
 
-    try {
-      const res = await responsePromise;
-      const positionId = res.payload?.position?.positionId?.toString();
-      console.log(`✅ Ordre placé: ${symbolName} ${signal.type} vol=${volume} posId=${positionId}`);
-      return { positionId };
-    } catch (e: any) {
-      console.error(`❌ Ordre échoué: ${e.message}`);
-      return { error: e.message };
+    // L'API retourne un ProtoOAExecutionEvent avec la position ouverte.
+    // Si aucune position/order ID n'est présent, on ne marque surtout pas l'ordre comme exécuté.
+    const positionId = res.position?.positionId
+      ?? res.order?.orderId;
+
+    if (!positionId) {
+      console.error('❌ cTrader order response without positionId/orderId:', JSON.stringify(res));
+      return {
+        success: false,
+        error: `cTrader n'a pas confirmé de position pour ${ctraderName}. Ordre non marqué comme exécuté. Volume tenté: ${volume}.`,
+        instrument: ctraderName,
+        units: volume,
+      };
     }
-  }
 
-  async amendSL(positionId: string, newSL: number, newTP?: number): Promise<{ success: boolean }> {
-    if (!this.authenticated) return { success: false };
+    console.log(`✅ cTrader Order placed: ${ctraderName} ${tradeSide === TRADE_SIDE.BUY ? 'BUY' : 'SELL'} vol=${volume} — positionId: ${positionId}`);
 
-    const msgId = `amend_${positionId}_${Date.now()}`;
-    const responsePromise = this.waitForResponse(msgId, PT.EXECUTION_EVT);
-    this.send(PT.AMEND_SL_REQ, {
-      ctidTraderAccountId: this.accountId,
-      positionId: parseInt(positionId, 10),
-      stopLoss: newSL,
-      ...(newTP !== undefined ? { takeProfit: newTP } : {}),
-    }, msgId);
-
-    try {
-      await responsePromise;
-      return { success: true };
-    } catch {
-      return { success: false };
-    }
-  }
-
-  async closePosition(positionId: string, volume: number = 0): Promise<OrderResult> {
-    if (!this.authenticated) return { error: 'Non authentifié' };
-
-    const msgId = `close_${positionId}_${Date.now()}`;
-    const responsePromise = this.waitForResponse(msgId, PT.EXECUTION_EVT);
-    this.send(PT.CLOSE_POS_REQ, {
-      ctidTraderAccountId: this.accountId,
-      positionId: parseInt(positionId, 10),
-      volume: volume || 10_000_000,
-    }, msgId);
-
-    try {
-      await responsePromise;
-      return { positionId };
-    } catch (e: any) {
-      if (e.message?.includes('POSITION_NOT_FOUND') || e.message?.includes('timeout')) {
-        return { positionId, alreadyClosed: true };
-      }
-      return { error: e.message };
-    }
-  }
-
-  async getAccountInfo(): Promise<AccountInfo> {
-    if (!this.authenticated) return { balance: 0, equity: 0 };
-
-    const msgId = `trader_${Date.now()}`;
-    const responsePromise = this.waitForResponse(msgId, PT.TRADER_RES);
-    this.send(PT.TRADER_REQ, { ctidTraderAccountId: this.accountId }, msgId);
-
-    try {
-      const res = await responsePromise;
-      const trader = res.payload?.trader ?? {};
-      const divisor = Math.pow(10, trader.moneyDigits ?? 2);
-      const balance = (trader.balance ?? 0) / divisor;
-      return { balance, equity: balance };
-    } catch {
-      return { balance: 0, equity: 0 };
-    }
-  }
-
-  async getOpenPositionIds(): Promise<string[]> {
-    if (!this.authenticated) return [];
-
-    const msgId = `reconcile_${Date.now()}`;
-    const responsePromise = this.waitForResponse(msgId, PT.RECONCILE_RES);
-    this.send(PT.RECONCILE_REQ, { ctidTraderAccountId: this.accountId }, msgId);
-
-    try {
-      const res = await responsePromise;
-      return (res.payload?.position ?? []).map((p: any) => p.positionId?.toString()).filter(Boolean);
-    } catch {
-      return [];
-    }
-  }
-
-  isConnected(): boolean {
-    return this.authenticated && !!this.socket && !this.socket.destroyed;
+    return {
+      success: true,
+      tradeId: positionId.toString(),
+      instrument: ctraderName,
+      units: volume,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message };
   }
 }
 
-export const ctraderService = new CTraderService();
+/**
+ * Ferme une position ouverte sur cTrader par son positionId.
+ */
+export async function closeOrder(tradeId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    await ensureConnection();
+  } catch (err: any) {
+    return { success: false, error: `Connexion cTrader échouée: ${err.message}` };
+  }
+
+  try {
+    await connection!.sendCommand(PT.CLOSE_POSITION_REQ, {
+      ctidTraderAccountId: ACCOUNT_ID,
+      positionId: parseInt(tradeId, 10),
+      volume: 0, // 0 = fermer la totalité de la position
+    });
+
+    console.log(`🔒 cTrader Position closed: positionId ${tradeId}`);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Retourne la liste des positions ouvertes sur le compte cTrader.
+ */
+export async function getOpenTrades(): Promise<OandaOpenTrade[]> {
+  try {
+    await ensureConnection();
+  } catch {
+    return [];
+  }
+
+  try {
+    const res: any = await connection!.sendCommand(PT.RECONCILE_REQ, {
+      ctidTraderAccountId: ACCOUNT_ID,
+    });
+
+    return (res.position ?? []).map((p: any) => {
+      const symbolName = symbolNameMap.get(p.tradeData?.symbolId) ?? `ID:${p.tradeData?.symbolId}`;
+      return {
+        tradeId:       (p.positionId ?? 0).toString(),
+        instrument:     symbolName,
+        units:          p.tradeData?.volume ?? 0,
+        openPrice:      p.price ?? 0,
+        unrealizedPnl:  (p.swap ?? 0) / 100, // approximation — le PnL exact nécessite le prix courant
+        openedAt:       new Date(Number(p.tradeData?.openTimestamp ?? 0)).toISOString(),
+      };
+    });
+  } catch {
+    return [];
+  }
+}

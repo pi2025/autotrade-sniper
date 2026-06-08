@@ -1,13 +1,13 @@
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
-import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default defineConfig(({ mode }) => {
+    // Charge toutes les variables d'environnement du fichier .env
     const env = loadEnv(mode, __dirname, '');
 
     return {
@@ -15,19 +15,19 @@ export default defineConfig(({ mode }) => {
         port: 3000,
         host: '0.0.0.0',
       },
-      plugins: [react(), tailwindcss()],
+      plugins: [react()],
       resolve: {
         alias: {
           '@': path.resolve(__dirname, './'),
         }
       },
       define: {
-        // loadEnv() reads .env files; process.env fallback handles CI/Vercel/Render
-        // where vars are injected directly into the environment (no .env file).
-        'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''),
-        'process.env.VITE_SUPABASE_KEY': JSON.stringify(env.VITE_SUPABASE_KEY || process.env.VITE_SUPABASE_KEY || ''),
-        'process.env.VITE_APP_PASSWORD': JSON.stringify(env.VITE_APP_PASSWORD || process.env.VITE_APP_PASSWORD || ''),
-        'process.env.VITE_API_URL': JSON.stringify(env.VITE_API_URL || process.env.VITE_API_URL || ''),
+        // SÉCURITÉ : injecter UNIQUEMENT les variables préfixées VITE_ côté client
+        // Jamais de secrets serveur (API_KEY, TELEGRAM_*, CTRADER_*, API_SECRET_TOKEN)
+        'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || ''),
+        'process.env.VITE_SUPABASE_KEY': JSON.stringify(env.VITE_SUPABASE_KEY || ''),
+        'process.env.VITE_APP_PASSWORD': JSON.stringify(env.VITE_APP_PASSWORD || ''),
+        'process.env.VITE_API_URL': JSON.stringify(env.VITE_API_URL || ''),
       },
       build: {
         outDir: 'dist',

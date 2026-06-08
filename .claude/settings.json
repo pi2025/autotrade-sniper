@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/Tchapo NIKABOU/.claude/plugins/marketplaces/local-desktop-app-uploads/superpowers/skills/subagent-driven-development/**)",
+      "WebSearch",
+      "Skill(gstack)",
+      "Skill(gstack:*)",
+      "Bash(cd \"c:\\\\Users\\\\Tchapo NIKABOU\\\\Documents\\\\GitHub\\\\autotrade-sniper\" && rm netlify.toml && echo \"netlify.toml supprimé\")",
+      "Bash(git rm *)",
+      "mcp__claude_ai_Vercel__deploy_to_vercel",
+      "Bash(Get-ChildItem -Path . -Recurse -Include \"*.ts\", \"*.tsx\", \"*.js\", \"*.jsx\", \"*.json\", \"*.yaml\", \"*.yml\", \"Dockerfile*\")",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(xargs grep -l \"import.*telegram\\\\|sendTelegramMessage\\\\|TELEGRAM\")",
+      "Bash(git push *)",
+      "Bash(npx vercel *)",
+      "Bash(ls tailwind.config* postcss.config*)",
+      "Bash(head -25 dist/index.html)",
+      "Bash(grep -ri \"render\" .env*)",
+      "Bash(grep -ri \"RENDER\" .env*)",
+      "Bash(ls .env*)",
+      "Bash(curl -s \"https://api.render.com/deploy/srv-d76ca1tm5p6s73bjnpt0?key=SUvGnEvyG60\" -X POST)",
+      "Bash(curl -s \"https://autotrade-sniper.onrender.com/api/health\")",
+      "mcp__claude_ai_Supabase__get_publishable_keys",
+      "mcp__claude_ai_Supabase__get_project_url",
+      "mcp__claude_ai_Supabase__list_tables",
+      "Bash(curl -s -X POST \"https://api.render.com/deploy/srv-d76ca1tm5p6s73bjnpt0?key=SUvGnEvyG60\")",
+      "Bash(git checkout *)",
+      "Bash(git merge claude/great-sammet --no-ff -m 'merge: intégration Codex \\(performance agent, AI pipeline, fixes\\) dans main *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Tchapo NIKABOU\\Documents\\GitHub\\autotrade-sniper"
+    ]
+  }
+}

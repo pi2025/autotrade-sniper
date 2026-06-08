@@ -68,12 +68,33 @@ const backtestAsset = (data: MarketData, strategy: StrategyParams): { trades: nu
         }
         
         if (tradeOpen && strategy.exitLogic !== 'ATR_TRAIL') {
-          const currentInd = calculateIndicators(history.slice(0, j + 1), highs.slice(0, j + 1), lows.slice(0, j + 1), opens.slice(0, j + 1), (volumes || []).slice(0, j + 1), strategy);
-          if (currentInd) {
-            if (strategy.exitLogic === 'ADX_FALL' && currentInd.adxSlope === 'FALLING') { exitPrice = close; tradeOpen = false; }
-            if (strategy.exitLogic === 'EMA_20_TOUCH') {
-              if (type === SignalType.BUY && low <= currentInd.ema20) { exitPrice = currentInd.ema20; tradeOpen = false; }
-              if (type === SignalType.SELL && high >= currentInd.ema20) { exitPrice = currentInd.ema20; tradeOpen = false; }
+          // Calcul léger inline au lieu de recalculer TOUS les indicateurs (O(n) → O(1))
+          if (strategy.exitLogic === 'ADX_FALL') {
+            // ADX approximé via variation directionnelle récente (14 bougies)
+            if (j >= 28) {
+              const adxWindow = 14;
+              let trSum = 0, dpSum = 0, dmSum = 0;
+              for (let k = j - adxWindow + 1; k <= j; k++) {
+                trSum += Math.max(highs[k] - lows[k], Math.abs(highs[k] - history[k - 1]), Math.abs(lows[k] - history[k - 1]));
+                const up = highs[k] - highs[k - 1], down = lows[k - 1] - lows[k];
+                dpSum += (up > down && up > 0) ? up : 0;
+                dmSum += (down > up && down > 0) ? down : 0;
+              }
+              const sTR = trSum / adxWindow;
+              const dP = sTR > 0 ? (dpSum / adxWindow / sTR) * 100 : 0;
+              const dM = sTR > 0 ? (dmSum / adxWindow / sTR) * 100 : 0;
+              const dx = (dP + dM) > 0 ? (Math.abs(dP - dM) / (dP + dM)) * 100 : 0;
+              if (dx < entryInd.adx * 0.7) { exitPrice = close; tradeOpen = false; }
+            }
+          }
+          if (tradeOpen && strategy.exitLogic === 'EMA_20_TOUCH') {
+            // EMA-20 approximée via SMA-20 sur les 20 dernières bougies
+            if (j >= 20) {
+              let sum20 = 0;
+              for (let k = j - 19; k <= j; k++) sum20 += history[k];
+              const ema20Approx = sum20 / 20;
+              if (type === SignalType.BUY && low <= ema20Approx) { exitPrice = ema20Approx; tradeOpen = false; }
+              if (type === SignalType.SELL && high >= ema20Approx) { exitPrice = ema20Approx; tradeOpen = false; }
             }
           }
         }

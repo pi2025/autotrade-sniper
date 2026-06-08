@@ -3,24 +3,20 @@ services:
     name: autotrade-sniper-api
     runtime: node
     plan: free
-    buildCommand: npm install --include=dev && npm run build
+    buildCommand: npm install
     startCommand: NODE_ENV=production npx tsx server.ts
     envVars:
       - key: NODE_ENV
         value: production
-      - key: SUPABASE_URL
-        value: "https://bzrsuuynxsikczcbbycn.supabase.co"
-      - key: SUPABASE_KEY
-        value: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cnN1dXlueHNpa2N6Y2JieWNuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU1MzQxNTAsImV4cCI6MjA4MTExMDE1MH0.MkkltE__1eTrRuMO2ddyqq8F8L8VxXjwEOdRZ5SnOkg"
-      - key: VITE_APP_PASSWORD
+      - key: VITE_SUPABASE_URL
         sync: false
-      - key: API_SECRET_TOKEN
-        sync: false
-      - key: API_KEY
+      - key: VITE_SUPABASE_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: API_KEY
         sync: false
       - key: CTRADER_CLIENT_ID
         sync: false
@@ -32,3 +28,11 @@ services:
         sync: false
       - key: CTRADER_LIVE
         value: "false"
+      - key: CTRADER_RISK_PERCENT
+        value: "1"
+      - key: VITE_APP_PASSWORD
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: API_SECRET_TOKEN
+        sync: false

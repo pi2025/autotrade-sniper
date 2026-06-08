@@ -1,11 +1,11 @@
 
 import React, { createContext, useContext, useEffect, useReducer, useRef } from 'react';
 import { AssetConfig, MarketData, Signal, TimeFrame, AssetType, StrategyParams, SignalStatus, SignalType, EmailConfig, TechnicalIndicators } from '../types';
-// calculateIndicators / analyzeMarket / fetchYahooData / fetchBinanceData sont
-// exécutés côté serveur — le frontend se contente de poller /api/signals.
-import { INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from '../services/marketEngine';
-// Supabase direct supprimé — le frontend passe exclusivement par l'API (/api/signals, /api/history).
-import { getCurrenciesFromAsset, checkCurrencyExposure, MAX_CURRENCY_EXPOSURE } from '../services/tradingUtils';
+import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from '../services/marketEngine';
+import { fetchYahooData } from '../services/yahooService';
+import { fetchBinanceData } from '../services/binanceService';
+import { apiUrl } from '../services/api';
+import { supabase, isConfigured as isSupabaseConfigured } from '../services/supabaseClient';
 
 const generateId = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
@@ -94,8 +94,69 @@ type Action =
   | { type: 'UPDATE_PERFORMANCE'; payload: number }
   | { type: 'RESET_DEFAULTS' };
 
-// getCurrenciesFromAsset, checkCurrencyExposure, MAX_CURRENCY_EXPOSURE
-// → importés depuis ../services/tradingUtils (source de vérité unique)
+const MAX_CURRENCY_EXPOSURE = 2; // Maximum 2R net exposure per currency
+
+const getCurrenciesFromAsset = (asset: string, assetType: AssetType): { base: string; quote: string } | null => {
+  const specialMappings: Record<string, { base: string; quote: string }> = {
+    'GC=F': { base: 'XAU', quote: 'USD' },
+    'SI=F': { base: 'XAG', quote: 'USD' },
+    'CL=F': { base: 'WTI', quote: 'USD' },
+    '^GSPC': { base: 'SPX', quote: 'USD' },
+    '^IXIC': { base: 'NDX', quote: 'USD' },
+    '^FCHI': { base: 'CAC', quote: 'EUR' },
+  };
+  if (specialMappings[asset]) {
+    return specialMappings[asset];
+  }
+
+  if (assetType === AssetType.FOREX) {
+    const clean = asset.replace('=X', '');
+    if (clean.length === 6) {
+      return { base: clean.substring(0, 3), quote: clean.substring(3, 6) };
+    }
+  }
+
+  if (assetType === AssetType.CRYPTO) {
+    const parts = asset.split('-');
+    if (parts.length === 2) {
+      return { base: parts[0], quote: parts[1] };
+    }
+  }
+
+  return null;
+};
+
+const checkCurrencyExposure = (
+  openSignals: Signal[],
+  newSignal: Signal,
+  threshold: number
+): { isAllowed: boolean; reason: string } => {
+  const exposure: Record<string, number> = {};
+  const allSignals = [...openSignals, newSignal];
+
+  for (const s of allSignals) {
+    const currencies = getCurrenciesFromAsset(s.asset, s.assetType);
+    if (currencies) {
+      const { base, quote } = currencies;
+      const weight = s.type === SignalType.BUY ? 1 : -1;
+      exposure[base] = (exposure[base] || 0) + weight;
+      exposure[quote] = (exposure[quote] || 0) - weight;
+    }
+  }
+
+  const newSignalCurrencies = getCurrenciesFromAsset(newSignal.asset, newSignal.assetType);
+  if (newSignalCurrencies) {
+    const { base, quote } = newSignalCurrencies;
+    if (Math.abs(exposure[base]) > threshold) {
+      return { isAllowed: false, reason: `Rejet: Exposition sur ${base} > ${threshold}R` };
+    }
+    if (Math.abs(exposure[quote]) > threshold) {
+      return { isAllowed: false, reason: `Rejet: Exposition sur ${quote} > ${threshold}R` };
+    }
+  }
+
+  return { isAllowed: true, reason: '' };
+};
 
 const signalsReducer = (state: SignalsState, action: Action): SignalsState => {
   switch (action.type) {
@@ -175,22 +236,29 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   useEffect(() => {
     const initApp = async () => {
-      // Restaurer l'état depuis localStorage immédiatement (évite un flash vide)
-      const localHistory = localStorage.getItem('v15_history');
-      if (localHistory) {
-        try { dispatch({ type: 'LOAD_HISTORY', payload: JSON.parse(localHistory) }); } catch {}
-      }
-      const localSignals = localStorage.getItem('v15_signals');
-      if (localSignals) {
-        try { dispatch({ type: 'LOAD_ACTIVE_SIGNALS', payload: JSON.parse(localSignals) }); } catch {}
-      }
       const localMuted = localStorage.getItem('v15_muted_obj');
-      if (localMuted) {
-        try { dispatch({ type: 'LOAD_MUTED', payload: JSON.parse(localMuted) }); } catch {}
-      }
+      if (localMuted) dispatch({ type: 'LOAD_MUTED', payload: JSON.parse(localMuted) });
+
       const localEmail = localStorage.getItem('v15_email_config');
-      if (localEmail) {
-        try { dispatch({ type: 'UPDATE_EMAIL_CONFIG', payload: JSON.parse(localEmail) }); } catch {}
+      if (localEmail) dispatch({ type: 'UPDATE_EMAIL_CONFIG', payload: JSON.parse(localEmail) });
+
+      if (!isSupabaseConfigured) {
+        const localSigs = localStorage.getItem('v15_signals');
+        if (localSigs) dispatch({ type: 'LOAD_ACTIVE_SIGNALS', payload: JSON.parse(localSigs) });
+        const localHisto = localStorage.getItem('v15_history');
+        if (localHisto) dispatch({ type: 'LOAD_HISTORY', payload: JSON.parse(localHisto) });
+        dispatch({ type: 'SET_LOADING', payload: false });
+        return;
+      }
+
+      try {
+        const { data: cloudSigs } = await supabase.from('signals').select('*');
+        if (cloudSigs) dispatch({ type: 'LOAD_ACTIVE_SIGNALS', payload: cloudSigs.map(s => s.content) });
+        
+        const { data: cloudHisto } = await supabase.from('history').select('*').order('closed_at', { ascending: false });
+        if (cloudHisto) dispatch({ type: 'LOAD_HISTORY', payload: cloudHisto.map(h => h.content) });
+      } catch (e) {
+        console.warn("Supabase load failed, falling back to local.");
       }
       dispatch({ type: 'SET_LOADING', payload: false });
     };
@@ -207,9 +275,9 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const clearNotification = () => dispatch({ type: 'CLEAR_NOTIFICATION' });
   const deleteSignal = async (id: string, asset: string) => {
     try {
-      const res = await fetch(`/api/signals/${id}`, {
+      const res = await fetch(apiUrl(`/api/signals/${id}`), {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${import.meta.env.VITE_APP_PASSWORD ?? ''}` },
+        headers: { 'Authorization': `Bearer ${process.env.VITE_APP_PASSWORD || ''}` },
       });
       if (res.ok) {
         dispatch({ type: 'DELETE_SIGNAL', payload: { id, asset } });
@@ -226,10 +294,10 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
       console.log("🔄 Syncing with server...");
       try {
         const [sigsRes, histRes, statusRes, scannerRes] = await Promise.all([
-          fetch('/api/signals').catch(e => { console.error("Fetch /api/signals failed:", e); throw e; }),
-          fetch('/api/history').catch(e => { console.error("Fetch /api/history failed:", e); throw e; }),
-          fetch('/api/engine/status').catch(e => { console.error("Fetch /api/engine/status failed:", e); throw e; }),
-          fetch('/api/scanner').catch(e => { console.error("Fetch /api/scanner failed:", e); throw e; })
+          fetch(apiUrl('/api/signals')).catch(e => { console.error("Fetch /api/signals failed:", e); throw e; }),
+          fetch(apiUrl('/api/history')).catch(e => { console.error("Fetch /api/history failed:", e); throw e; }),
+          fetch(apiUrl('/api/engine/status')).catch(e => { console.error("Fetch /api/engine/status failed:", e); throw e; }),
+          fetch(apiUrl('/api/scanner')).catch(e => { console.error("Fetch /api/scanner failed:", e); throw e; })
         ]);
         console.log("✅ Fetch responses received", { 
           sigs: sigsRes.status, 
@@ -254,11 +322,7 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
           const scanner = await checkJson(scannerRes);
 
           dispatch({ type: 'LOAD_ACTIVE_SIGNALS', payload: sigs });
-          // Ne pas écraser un historique local non-vide avec un tableau vide du serveur
-          // (protège contre les redémarrages Render qui perdent l'état en mémoire)
-          if (Array.isArray(hist) && hist.length > 0) {
-            dispatch({ type: 'LOAD_HISTORY', payload: hist });
-          }
+          dispatch({ type: 'LOAD_HISTORY', payload: hist });
           dispatch({ type: 'SET_ENGINE', payload: status.isRunning });
           dispatch({ type: 'SET_LAST_SCAN_TIME', payload: status.lastScanTime });
           dispatch({ type: 'UPDATE_PERFORMANCE', payload: status.lastBatchTimeMs });
@@ -287,17 +351,30 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
 
     syncWithServer();
-    intervalId = setInterval(syncWithServer, 10000); // Sync toutes les 10s
-    
-    return () => clearInterval(intervalId);
+    // 30s au lieu de 10s — le moteur serveur tourne en continu,
+    // pas besoin de poll agressif côté client (économie CPU/batterie)
+    intervalId = setInterval(syncWithServer, 30000);
+
+    // Pause polling quand l'onglet est masqué (économie batterie mobile)
+    const onVisibility = () => {
+      if (document.hidden) {
+        clearInterval(intervalId);
+      } else {
+        syncWithServer();
+        intervalId = setInterval(syncWithServer, 30000);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, []);
 
   const toggleEngine = async () => {
     try {
-      const res = await fetch('/api/engine/toggle', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${import.meta.env.VITE_APP_PASSWORD ?? ''}` },
-      });
+      const res = await fetch(apiUrl('/api/engine/toggle'), { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         dispatch({ type: 'SET_ENGINE', payload: data.isRunning });
@@ -312,12 +389,9 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
       updateSignalExplanation: (id: string, text: string) => dispatch({ type: 'UPDATE_SIGNAL_AI', payload: { id, text } }),
       setStrategy: async (id: string) => {
         try {
-          const res = await fetch('/api/engine/strategy', {
+          const res = await fetch(apiUrl('/api/engine/strategy'), {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${import.meta.env.VITE_APP_PASSWORD ?? ''}`,
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ strategyId: id })
           });
           if (res.ok) {
@@ -330,12 +404,11 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
       },
       updateEmailConfig: (cfg: EmailConfig) => dispatch({ type: 'UPDATE_EMAIL_CONFIG', payload: cfg }),
       clearMuted: async () => {
-        dispatch({ type: 'CLEAR_MUTED' }); // optimiste — UI réagit immédiatement
         try {
-          await fetch('/api/engine/unmute', {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${import.meta.env.VITE_APP_PASSWORD ?? ''}` },
-          });
+          const res = await fetch(apiUrl('/api/engine/unmute'), { method: 'POST' });
+          if (res.ok) {
+            dispatch({ type: 'CLEAR_MUTED' });
+          }
         } catch (e) {
           console.error("Erreur clear muted:", e);
         }

@@ -7,7 +7,7 @@ import {
   ArrowLeft, Bot, Calculator, ArrowUpRight, ArrowDownRight, Activity, Zap, Check, X, AlertTriangle, ExternalLink, Globe, Newspaper, Hourglass, Trash2, ShieldAlert
 } from 'lucide-react';
 import { YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Area, AreaChart, Line, CartesianGrid, ReferenceArea } from 'recharts';
-// geminiService est serveur-only — on passe par l'endpoint /api/ai/explain
+import { apiUrl } from '../services/api';
 
 const SignalDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -15,7 +15,7 @@ const SignalDetails: React.FC = () => {
   const { signals = [], marketData = {}, updateSignalExplanation, deleteSignal } = useSignals();
   
   const [loadingAi, setLoadingAi] = useState(false);
-  const [aiData, setAiData] = useState<{text: string, sources: any[]}>({ text: "", sources: [] });
+  const [aiData, setAiData] = useState<{text: string, sources: any[], macroScore: number}>({ text: "", sources: [], macroScore: 50 });
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   const signal = (signals || []).find(s => s.id === id);
@@ -25,25 +25,11 @@ const SignalDetails: React.FC = () => {
     if (signal && !aiData.text && !loadingAi) {
       const fetchAi = async () => {
         setLoadingAi(true);
-        try {
-          const res = await fetch('/api/ai/explain', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${import.meta.env.VITE_APP_PASSWORD ?? ''}`,
-            },
-            body: JSON.stringify({ signal }),
-          });
-          const data: { text: string; sources: any[] } = res.ok
-            ? await res.json()
-            : { text: `Erreur serveur IA (${res.status})`, sources: [] };
-          setAiData(data);
-          updateSignalExplanation(signal.id, data.text);
-        } catch (e: any) {
-          setAiData({ text: `Erreur réseau : ${e.message}`, sources: [] });
-        } finally {
-          setLoadingAi(false);
-        }
+        const res = await fetch(apiUrl(`/api/signals/${signal.id}/analyze`), { method: 'POST' });
+        const data = await res.json();
+        setAiData(data);
+        updateSignalExplanation(signal.id, data.text);
+        setLoadingAi(false);
       };
       fetchAi();
     }
@@ -71,19 +57,19 @@ const SignalDetails: React.FC = () => {
   const chandelier = ind?.chandelierExit || signal.tradeSetup.stopLoss;
   const isExitTriggered = isBuy ? currentPrice <= chandelier : currentPrice >= chandelier;
 
-  const chartData = ind ? (currentMarketData.history || []).map((price, idx) => ({
-      i: idx,
-      price,
-      ema200: ind.ema200,
+  const chartData = (currentMarketData.history || []).map((price, idx) => ({ 
+      i: idx, 
+      price, 
+      ema200: ind.ema200, 
       emaH4: ind.emaH4,
       chandelier: chandelier,
-      upperDonchian: ind.donchian?.upper,
-      lowerDonchian: ind.donchian?.lower,
-      upperBand: ind.bollingerBands?.upper,
-      lowerBand: ind.bollingerBands?.lower,
+      upperDonchian: ind.donchian.upper,
+      lowerDonchian: ind.donchian.lower,
+      upperBand: ind.bollingerBands.upper,
+      lowerBand: ind.bollingerBands.lower,
       tp: signal.tradeSetup.takeProfit,
       sl: signal.tradeSetup.stopLoss
-  })).slice(-100) : [];
+  })).slice(-100);
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-32">
@@ -229,10 +215,17 @@ const SignalDetails: React.FC = () => {
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-xl">
              <div className="flex items-center justify-between mb-8">
                 <div className="flex items-center gap-3 text-cyan-400 font-black uppercase text-sm">
-                    <Bot className="w-6 h-6" /> 
+                    <Bot className="w-6 h-6" />
                     Synthèse Macro Quantum
                 </div>
-                {loadingAi && <Activity className="w-4 h-4 animate-spin text-slate-500" />}
+                <div className="flex items-center gap-3">
+                  {aiData.macroScore !== 50 && (
+                    <div className={`text-xs font-bold px-2 py-1 rounded-lg ${aiData.macroScore >= 65 ? 'bg-emerald-500/20 text-emerald-400' : aiData.macroScore >= 45 ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'}`}>
+                      Score Macro IA : {aiData.macroScore}/100
+                    </div>
+                  )}
+                  {loadingAi && <Activity className="w-4 h-4 animate-spin text-slate-500" />}
+                </div>
              </div>
              
              <div className="prose prose-invert max-w-none">
@@ -270,10 +263,10 @@ const SignalDetails: React.FC = () => {
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-xl">
             <h3 className="font-black text-white text-xs uppercase tracking-widest mb-8 flex items-center gap-2"><Zap className="w-4 h-4 text-cyan-400" /> Score de Conformité</h3>
             <div className="space-y-5">
-               <ComplianceItem label="Alignement Tendance H4" status={ind?.mtfAlignment?.isAligned} />
-               <ComplianceItem label="Squeeze de Volatilité" status={ind?.bollingerBands?.isSqueezing} />
-               <ComplianceItem label="Momentum ADX (>32)" status={(ind?.adx ?? 0) > 32} />
-               <ComplianceItem label="Structure Donchian" status={isBuy ? currentPrice > (ind?.donchian?.middle ?? 0) : currentPrice < (ind?.donchian?.middle ?? Infinity)} />
+               <ComplianceItem label="Alignement Tendance H4" status={ind.mtfAlignment?.isAligned} />
+               <ComplianceItem label="Squeeze de Volatilité" status={ind.bollingerBands.isSqueezing} />
+               <ComplianceItem label="Momentum ADX (>32)" status={ind.adx > 32} />
+               <ComplianceItem label="Structure Donchian" status={isBuy ? currentPrice > ind.donchian.middle : currentPrice < ind.donchian.middle} />
                <div className="pt-4 mt-4 border-t border-slate-800">
                   <div className="flex justify-between items-center">
                     <span className="text-[10px] text-slate-500 uppercase font-black">Probabilité Quantum</span>
@@ -292,11 +285,7 @@ const SignalDetails: React.FC = () => {
                 
                 <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 mt-4">
                    <div className="text-[9px] text-slate-500 uppercase font-black mb-1">Taille de Position Sug.</div>
-                   <div className="text-sm font-bold text-white">
-                     {signal.tradeSetup?.positionSizeUnit
-                       ? `${(signal.tradeSetup.positionSizeUnit / 1000).toFixed(2)} Lots Standard`
-                       : "Calculé par l'agent"}
-                   </div>
+                   <div className="text-sm font-bold text-white">{(signal.tradeSetup.positionSizeUnit / 1000).toFixed(2)} Lots Standard</div>
                    <div className="text-[8px] text-slate-600 mt-1 italic">Calculé selon Kelly Criterion & Volatilité ATR</div>
                 </div>
              </div>

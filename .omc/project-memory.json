@@ -1,0 +1,500 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1780125156174,
+  "projectRoot": "c:\\Users\\Tchapo NIKABOU\\Documents\\GitHub\\autotrade-sniper",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "tsconfig.json"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "express",
+        "version": "5.2.1",
+        "category": "backend"
+      },
+      {
+        "name": "react",
+        "version": "19.2.1",
+        "category": "frontend"
+      },
+      {
+        "name": "react-dom",
+        "version": "19.2.1",
+        "category": "frontend"
+      },
+      {
+        "name": "vite",
+        "version": "6.2.0",
+        "category": "build"
+      }
+    ],
+    "packageManager": "npm",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "cd \"c:\\Users\\Tchapo NIKABOU\\Documents\\GitHub\\autotrade-sniper\" && git add package.json package-lock.json && git commit -m \"fix: install groq-sdk + @reiryoku/ctrader-layer (missing from node_modules)\n\nPackages were declared in package.json but not installed — tsc was\nfailing with TS2307 on groq-sdk and ctrader-layer imports.\nnpm install --include=dev resolves all TypeScript errors cleanly.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\" && git push",
+    "testCommand": null,
+    "lintCommand": "npm run lint",
+    "devCommand": "npm run dev",
+    "scripts": {
+      "dev": "tsx server.ts",
+      "start": "NODE_ENV=production npx tsx server.ts",
+      "build": "vite build",
+      "preview": "vite preview",
+      "lint": "tsc --noEmit"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "components",
+      "docs",
+      "pages",
+      "public"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "components": {
+      "path": "components",
+      "purpose": "UI components",
+      "fileCount": 3,
+      "lastAccessed": 1780125156024,
+      "keyFiles": [
+        "Layout.tsx",
+        "LoginGate.tsx",
+        "SignalCard.tsx"
+      ]
+    },
+    "context": {
+      "path": "context",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1780125156069,
+      "keyFiles": [
+        "SignalsContext.tsx"
+      ]
+    },
+    "dist": {
+      "path": "dist",
+      "purpose": "Distribution/build output",
+      "fileCount": 2,
+      "lastAccessed": 1780125156071,
+      "keyFiles": [
+        "index.html",
+        "_redirects"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 2,
+      "lastAccessed": 1780125156073,
+      "keyFiles": [
+        "go-to-market-checklist.md",
+        "supabase-rls-migration.sql"
+      ]
+    },
+    "migrated_prompt_history": {
+      "path": "migrated_prompt_history",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1780125156074,
+      "keyFiles": [
+        "prompt_2026-02-17T18_44_10.801Z.json"
+      ]
+    },
+    "pages": {
+      "path": "pages",
+      "purpose": "Page components",
+      "fileCount": 6,
+      "lastAccessed": 1780125156077,
+      "keyFiles": [
+        "Admin.tsx",
+        "AgentCenter.tsx",
+        "Backtest.tsx",
+        "Dashboard.tsx",
+        "Scanner.tsx"
+      ]
+    },
+    "public": {
+      "path": "public",
+      "purpose": "Public files",
+      "fileCount": 1,
+      "lastAccessed": 1780125156081,
+      "keyFiles": [
+        "_redirects"
+      ]
+    },
+    "services": {
+      "path": "services",
+      "purpose": "Business logic services",
+      "fileCount": 11,
+      "lastAccessed": 1780125156085,
+      "keyFiles": [
+        "agentController.ts",
+        "backtestEngine.ts",
+        "binanceService.ts",
+        "ctrader.proto",
+        "ctraderService.ts"
+      ]
+    },
+    "supabase": {
+      "path": "supabase",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1780125156087,
+      "keyFiles": []
+    },
+    "dist\\assets": {
+      "path": "dist\\assets",
+      "purpose": "Static assets",
+      "fileCount": 3,
+      "lastAccessed": 1780125156092,
+      "keyFiles": [
+        "index-CHfKQ_vr.js",
+        "index-CxpUzBuD.css",
+        "manifest-Dhl7HPSW.json"
+      ]
+    },
+    "supabase\\migrations": {
+      "path": "supabase\\migrations",
+      "purpose": "Database migrations",
+      "fileCount": 2,
+      "lastAccessed": 1780125156102,
+      "keyFiles": [
+        "001_initial_schema.sql",
+        "002_rls_migration.sql"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "server.ts",
+      "accessCount": 107,
+      "lastAccessed": 1780265193554,
+      "type": "file"
+    },
+    {
+      "path": "pages\\AgentCenter.tsx",
+      "accessCount": 45,
+      "lastAccessed": 1780039500559,
+      "type": "file"
+    },
+    {
+      "path": "context\\SignalsContext.tsx",
+      "accessCount": 35,
+      "lastAccessed": 1780263874716,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 22,
+      "lastAccessed": 1780032852234,
+      "type": "directory"
+    },
+    {
+      "path": "pages\\Admin.tsx",
+      "accessCount": 12,
+      "lastAccessed": 1780007407254,
+      "type": "file"
+    },
+    {
+      "path": "pages\\SignalDetails.tsx",
+      "accessCount": 12,
+      "lastAccessed": 1780033368864,
+      "type": "file"
+    },
+    {
+      "path": "types.ts",
+      "accessCount": 11,
+      "lastAccessed": 1780269600322,
+      "type": "file"
+    },
+    {
+      "path": "services\\ctraderService.ts",
+      "accessCount": 10,
+      "lastAccessed": 1780033230517,
+      "type": "file"
+    },
+    {
+      "path": "services\\agentController.ts",
+      "accessCount": 9,
+      "lastAccessed": 1780040907750,
+      "type": "file"
+    },
+    {
+      "path": "vite.config.ts",
+      "accessCount": 7,
+      "lastAccessed": 1780037657997,
+      "type": "file"
+    },
+    {
+      "path": "render.yaml",
+      "accessCount": 7,
+      "lastAccessed": 1780041678724,
+      "type": "file"
+    },
+    {
+      "path": "pages\\Dashboard.tsx",
+      "accessCount": 6,
+      "lastAccessed": 1780006923822,
+      "type": "file"
+    },
+    {
+      "path": "services\\supabaseClient.ts",
+      "accessCount": 6,
+      "lastAccessed": 1780007346965,
+      "type": "file"
+    },
+    {
+      "path": "docs\\go-to-market-checklist.md",
+      "accessCount": 5,
+      "lastAccessed": 1778599791697,
+      "type": "file"
+    },
+    {
+      "path": "supabase_schema.sql",
+      "accessCount": 5,
+      "lastAccessed": 1778600412499,
+      "type": "file"
+    },
+    {
+      "path": "pages\\Backtest.tsx",
+      "accessCount": 5,
+      "lastAccessed": 1780032844289,
+      "type": "file"
+    },
+    {
+      "path": "services\\marketEngine.ts",
+      "accessCount": 5,
+      "lastAccessed": 1780265170345,
+      "type": "file"
+    },
+    {
+      "path": "services/marketEngine.ts",
+      "accessCount": 4,
+      "lastAccessed": 1778601592267,
+      "type": "directory"
+    },
+    {
+      "path": ".env.example",
+      "accessCount": 4,
+      "lastAccessed": 1779988593751,
+      "type": "file"
+    },
+    {
+      "path": "vercel.json",
+      "accessCount": 4,
+      "lastAccessed": 1780002583151,
+      "type": "file"
+    },
+    {
+      "path": "package.json",
+      "accessCount": 4,
+      "lastAccessed": 1780032389889,
+      "type": "file"
+    },
+    {
+      "path": "index.tsx",
+      "accessCount": 4,
+      "lastAccessed": 1780037684260,
+      "type": "file"
+    },
+    {
+      "path": "docs\\superpowers\\plans\\2026-05-12-go-to-market-fixes.md",
+      "accessCount": 3,
+      "lastAccessed": 1778599325706,
+      "type": "file"
+    },
+    {
+      "path": "services\\geminiService.ts",
+      "accessCount": 3,
+      "lastAccessed": 1779889199657,
+      "type": "file"
+    },
+    {
+      "path": "App.tsx",
+      "accessCount": 3,
+      "lastAccessed": 1780007202871,
+      "type": "file"
+    },
+    {
+      "path": "index.html",
+      "accessCount": 3,
+      "lastAccessed": 1780037702833,
+      "type": "file"
+    },
+    {
+      "path": "netlify.toml",
+      "accessCount": 2,
+      "lastAccessed": 1779885116608,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
+      "accessCount": 2,
+      "lastAccessed": 1779988615884,
+      "type": "file"
+    },
+    {
+      "path": "pages",
+      "accessCount": 2,
+      "lastAccessed": 1779988647129,
+      "type": "directory"
+    },
+    {
+      "path": ".env.vercel.local",
+      "accessCount": 2,
+      "lastAccessed": 1779988775803,
+      "type": "file"
+    },
+    {
+      "path": "pages\\Scanner.tsx",
+      "accessCount": 2,
+      "lastAccessed": 1780007201057,
+      "type": "directory"
+    },
+    {
+      "path": "components\\LoginGate.tsx",
+      "accessCount": 2,
+      "lastAccessed": 1780007210108,
+      "type": "file"
+    },
+    {
+      "path": "index.css",
+      "accessCount": 2,
+      "lastAccessed": 1780037674700,
+      "type": "file"
+    },
+    {
+      "path": "context",
+      "accessCount": 1,
+      "lastAccessed": 1778595923302,
+      "type": "directory"
+    },
+    {
+      "path": "docs\\superpowers\\specs\\2026-05-12-go-to-market-fixes-design.md",
+      "accessCount": 1,
+      "lastAccessed": 1778598418343,
+      "type": "file"
+    },
+    {
+      "path": "docs\\supabase-rls-migration.sql",
+      "accessCount": 1,
+      "lastAccessed": 1778599784582,
+      "type": "file"
+    },
+    {
+      "path": ".env",
+      "accessCount": 1,
+      "lastAccessed": 1778600343542,
+      "type": "file"
+    },
+    {
+      "path": "tsconfig.json",
+      "accessCount": 1,
+      "lastAccessed": 1779885107945,
+      "type": "file"
+    },
+    {
+      "path": "services\\yahooService.ts",
+      "accessCount": 1,
+      "lastAccessed": 1779885129596,
+      "type": "file"
+    },
+    {
+      "path": "services\\tradingUtils.ts",
+      "accessCount": 1,
+      "lastAccessed": 1779885744723,
+      "type": "file"
+    },
+    {
+      "path": ".vercel\\project.json",
+      "accessCount": 1,
+      "lastAccessed": 1779886724922,
+      "type": "file"
+    },
+    {
+      "path": "services\\notificationService.ts",
+      "accessCount": 1,
+      "lastAccessed": 1779988577675,
+      "type": "file"
+    },
+    {
+      "path": "services",
+      "accessCount": 1,
+      "lastAccessed": 1779988583387,
+      "type": "directory"
+    },
+    {
+      "path": "supabase\\migrations\\002_rls_migration.sql",
+      "accessCount": 1,
+      "lastAccessed": 1779988615315,
+      "type": "file"
+    },
+    {
+      "path": "supabase\\migrations\\001_initial_schema.sql",
+      "accessCount": 1,
+      "lastAccessed": 1779988615534,
+      "type": "file"
+    },
+    {
+      "path": "services\\backtestEngine.ts",
+      "accessCount": 1,
+      "lastAccessed": 1779988647470,
+      "type": "file"
+    },
+    {
+      "path": "CLAUDE.md",
+      "accessCount": 1,
+      "lastAccessed": 1779988657632,
+      "type": "file"
+    },
+    {
+      "path": "components\\SignalCard.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1780007208783,
+      "type": "file"
+    },
+    {
+      "path": "components\\Layout.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1780007209260,
+      "type": "file"
+    },
+    {
+      "path": "docs\\superpowers\\plans\\2026-05-29-bugfix-code-review.md",
+      "accessCount": 1,
+      "lastAccessed": 1780033307776,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

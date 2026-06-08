@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd \\\"c:\\\\Users\\\\Tchapo NIKABOU\\\\Documents\\\\GitHub\\\\autotrade-sniper\\\" && git checkout main && git merge claude/great-sammet --no-ff -m \\\"merge: intégration travaux Codex (performance agent...",
+  "error": "Exit code 1\nerror: Your local changes to the following files would be overwritten by checkout:\n\tserver.ts\n\ttypes.ts\nPlease commit your changes or stash them before you switch branches.\nAborting",
+  "timestamp": "2026-06-01T06:38:40.770Z",
+  "retry_count": 1
+}

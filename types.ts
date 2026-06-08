@@ -19,41 +19,6 @@ export enum SignalStatus {
   LOSS = 'LOSS'
 }
 
-export type AgentMode = 'SIGNALS_ONLY' | 'SEMI_AUTO' | 'AUTONOMOUS' | 'EMERGENCY_STOP';
-
-export type AgentPositionSizingMode = 'RISK_PERCENT' | 'FIXED_AMOUNT' | 'FIXED_LOT';
-
-export interface AgentPositionSizing {
-  mode: AgentPositionSizingMode;
-  riskPercent: number;
-  fixedAmount: number;
-  fixedLot: number;
-  multiplier: number;
-  forexMultiplier: number;
-  cryptoMultiplier: number;
-  commodityMultiplier: number;
-  indexMultiplier: number;
-  stockMultiplier: number;
-  minVolumeUnits: number;
-  maxVolumeUnits: number;
-}
-
-export interface AgentLimits {
-  maxSimultaneousTrades: number;
-  maxRiskPercent: number;
-  maxDrawdownPercent: number;
-  positionSizing: AgentPositionSizing;
-}
-
-export interface AgentStatus {
-  mode: AgentMode;
-  limits: AgentLimits;
-  connected: boolean;
-  balance: number;
-  equity: number;
-  openPositions: number;
-}
-
 export type PerformanceAgentProfile = 'ADAPTIVE_PERFORMANCE' | 'CONSERVATIVE_RECOVERY' | 'AGGRESSIVE_GROWTH';
 
 export interface PerformanceStats {
@@ -144,7 +109,6 @@ export interface TechnicalIndicators {
     lower: number;
     bandwidth: number;
     isSqueezing: boolean;
-    wasRecentlySqueezed: boolean;
   };
   trendContext: 'BULLISH' | 'BEARISH' | 'SIDEWAYS';
   rsi: number;
@@ -153,8 +117,6 @@ export interface TechnicalIndicators {
   ema200: number;
   emaH4: number; // For H4 trend context
   volumeTrend: 'HIGH' | 'LOW' | 'NEUTRAL';
-  volumeRatio: number;        // volume actuel / moyenne 20 bougies (1.0 = neutre)
-  hasVolumeData: boolean;     // false sur Forex tick-only → filtre ignoré
   marketPhase: MarketPhase;
   chandelierExit: number;
   choppiness: number;
@@ -206,8 +168,7 @@ export interface Signal {
   scoreBreakdown: ScoreFactor[];
   estimatedDuration: string; 
   isBreakevenSet?: boolean;
-  originalStopLoss?: number;
-  ctraderPositionId?: string;
+  originalStopLoss?: number; // SL initial avant breakeven — utilisé pour calculer le R correct
 }
 
 export interface AssetConfig {

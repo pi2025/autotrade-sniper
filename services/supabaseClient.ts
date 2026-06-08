@@ -1,35 +1,42 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Public client variables — use import.meta.env (native Vite, works on Vercel/CI without .env file).
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_KEY || '';
+// SÉCURITÉ : credentials via .env uniquement — jamais de fallback hardcodé
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_KEY || '';
 
-export const isConfigured =
-  SUPABASE_URL.length > 0 &&
-  SUPABASE_URL !== 'https://votre-projet.supabase.co' &&
-  SUPABASE_ANON_KEY.length > 0 &&
-  SUPABASE_ANON_KEY !== 'votre-cle-anon-publique';
+// Vérification si les clés sont configurées
+export const isConfigured = 
+    SUPABASE_URL.length > 0 && 
+    SUPABASE_URL !== 'https://votre-projet.supabase.co' &&
+    SUPABASE_ANON_KEY.length > 0 &&
+    SUPABASE_ANON_KEY !== 'votre-cle-anon-publique';
 
+// Création du client
 const clientUrl = isConfigured ? SUPABASE_URL : 'https://placeholder.supabase.co';
 const clientKey = isConfigured ? SUPABASE_ANON_KEY : 'placeholder';
 
-export const supabase: SupabaseClient = createClient(clientUrl, clientKey);
+export const supabase = createClient(clientUrl, clientKey);
 
+// Helper pour vérifier la connexion au démarrage
 export const checkConnection = async (): Promise<'connected' | 'missing_config' | 'error'> => {
-  if (!isConfigured) return 'missing_config';
+    if (!isConfigured) return 'missing_config';
 
-  try {
-    const { error } = await supabase.from('signals').select('id', { count: 'exact', head: true });
-
-    if (error) {
-      console.warn('Supabase Warning:', error.message, error.code);
-      if (error.code === 'PGRST116') return 'connected';
-      return 'error';
+    try {
+        // Tentative de ping sur la table signals
+        const { error } = await supabase.from('signals').select('id', { count: 'exact', head: true });
+        
+        // Si l'erreur est liée à une table inexistante (404/PGRST204) ou autre
+        if (error) {
+            console.warn("Supabase Warning:", error.message, error.code);
+            // On considère connecté même si la table est vide ou s'il y a une erreur de droits spécifique,
+            // tant que le serveur répond.
+            if (error.code === 'PGRST116') return 'connected'; // JSON returned no data, connection ok
+            
+            return 'error';
+        }
+        return 'connected';
+    } catch (e) {
+        console.error("Supabase Connection Error:", e);
+        return 'error';
     }
-
-    return 'connected';
-  } catch (e) {
-    console.error('Supabase Connection Error:', e);
-    return 'error';
-  }
 };
