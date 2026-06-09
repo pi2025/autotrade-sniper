@@ -29,9 +29,21 @@ npx tsx scripts/validation/fetch-historical.ts
 - ⚠️  2 000–5 000 barres ≈ 2–4 mois — marginal
 - ❌ < 2 000 barres — insuffisant pour conclure
 
-## Critères d'arrêt (à définir avec le CEO avant B3)
+## Critères d'arrêt — définis le 2026-06-08 (CEO + Claude)
 
-Avant de lancer le walk-forward, définir par écrit :
-- Quel expectancy minimum pour "edge confirmé" (ex : > 0.1R/trade sur 3+ fenêtres)
-- Quel résultat déclenche l'abandon de la stratégie actuelle
-- Qui valide le rapport final avant toute modification de marketEngine.ts
+### Edge confirmé → stabiliser la stratégie
+| Métrique | Seuil |
+|---|---|
+| Expectancy nette | ≥ +0.10R/trade sur ≥ 3 fenêtres OOS sur 4 |
+| Profit factor agrégé | ≥ 1.30 |
+| Win rate | ≥ 38% (seuil de rentabilité pour 2R = 33%) |
+| Trades agrégés | ≥ 30 (en dessous : verdict "non concluant") |
+
+### Abandon → pivoter vers une autre stratégie
+| Condition | Verdict |
+|---|---|
+| Expectancy ≤ 0 sur 2 fenêtres consécutives OU en agrégé | Abandon stratégie actuelle |
+| Profit factor < 1.0 en agrégé | Abandon |
+| < 15 trades en agrégé | "Trop sélectif" — revoir les filtres, pas abandon direct |
+
+**Qui valide :** le CEO valide le rapport B3 avant toute modification de `marketEngine.ts`.

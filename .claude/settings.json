@@ -25,10 +25,24 @@
       "mcp__claude_ai_Supabase__list_tables",
       "Bash(curl -s -X POST \"https://api.render.com/deploy/srv-d76ca1tm5p6s73bjnpt0?key=SUvGnEvyG60\")",
       "Bash(git checkout *)",
-      "Bash(git merge claude/great-sammet --no-ff -m 'merge: intégration Codex \\(performance agent, AI pipeline, fixes\\) dans main *)"
+      "Bash(git merge claude/great-sammet --no-ff -m 'merge: intégration Codex \\(performance agent, AI pipeline, fixes\\) dans main *)",
+      "Bash(npx tsx *)",
+      "Bash(Remove-Item \"c:\\\\Users\\\\Tchapo NIKABOU\\\\Documents\\\\GitHub\\\\autotrade-sniper\\\\.git\\\\index.lock\" -Force)",
+      "Bash(Write-Output \"Lock removed\")",
+      "Bash(rm -f \"c:/Users/Tchapo NIKABOU/Documents/GitHub/autotrade-sniper/.git/index.lock\" && echo \"Lock removed\")",
+      "Bash(timeout 5 bash -c \"echo > /dev/tcp/demo.ctraderapi.com/5035\")",
+      "Bash(node -e ' *)",
+      "Bash(mkdir -p docs/superpowers/specs)",
+      "Bash(ls docs/superpowers/specs/)",
+      "Bash(grep -l \"production-branch\" .github/workflows/*.yml)",
+      "Bash(grep \"production-branch\" .github/workflows/deploy-netlify.yml)",
+      "Bash(not exist *)",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\Tchapo NIKABOU\\\\Documents\\\\GitHub\\\\autotrade-sniper\\\\docs\\\\superpowers\\\\specs\")",
+      "Bash(Select-String \"server.ts\")"
     ],
     "additionalDirectories": [
-      "c:\\Users\\Tchapo NIKABOU\\Documents\\GitHub\\autotrade-sniper"
+      "c:\\Users\\Tchapo NIKABOU\\Documents\\GitHub\\autotrade-sniper",
+      "c:\\Users\\Tchapo NIKABOU\\Documents\\GitHub\\autotrade-sniper\\.git"
     ]
   }
 }

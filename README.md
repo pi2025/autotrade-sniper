@@ -41,6 +41,6 @@ Voir [docs/go-to-market-checklist.md](docs/go-to-market-checklist.md) pour les c
 
 ## Deploiement
 
-- Netlify publie `dist` et proxifie `/api/*` vers Render via `netlify.toml`.
+- Vercel publie `dist` en tant que SPA (vercel.json).
 - Render lance l'API avec `NODE_ENV=production npx tsx server.ts`.
 - En production, les routes sensibles refusent les requetes si aucune variable d'authentification n'est configuree.

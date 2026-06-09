@@ -2,13 +2,13 @@
 
 ## Runtime
 
-- Front public: `https://autotrade-sniper.netlify.app`
-- API via front proxy: `https://autotrade-sniper.netlify.app/api/health`
+- Front public: `https://autotrade-sniper.vercel.app`
+- API via front proxy: `https://autotrade-sniper.vercel.app/api/health`
 - Backend Render target: `https://autotrade-sniper.onrender.com`
 
 ## Required Environment Variables
 
-### Netlify
+### Vercel
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_KEY`
@@ -37,7 +37,7 @@
 - `GET /api/health` returns `status: ok`
 - `GET /api/engine/status` returns JSON with `isRunning`, `agentMode`, and `riskLimits`
 - `GET /api/signals`, `/api/history`, and `/api/scanner` return JSON, not HTML
-- `VITE_APP_PASSWORD` is set in Netlify before publishing
+- `VITE_APP_PASSWORD` is set in Vercel before publishing
 - `API_SECRET_TOKEN` or `VITE_APP_PASSWORD` is set in Render before production traffic
 - cTrader remains in semi-auto mode for first customer-facing launch unless live autonomous trading has been formally approved
 - Auth headers present on all protected POST routes: `POST /api/engine/toggle`, `/api/engine/strategy`, `/api/engine/unmute` send `Authorization: Bearer <VITE_APP_PASSWORD>`
