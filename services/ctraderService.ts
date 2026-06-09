@@ -462,46 +462,52 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
   const ctraderName = SYMBOL_MAP[signal.asset] ?? signal.asset;
 
   try {
-    // Snapshot des positions AVANT l'ordre — la lib retourne {} pour ProtoOANewOrderReq
-    // car ProtoOAExecutionEvent est un événement non corrélé (pas de clientMsgId matchant).
-    // On confirme l'exécution en comparant les positions avant/après.
-    const beforeTrades = await getOpenTrades();
-    const beforeIds = new Set(beforeTrades.map(t => t.tradeId));
-    console.log(`📋 cTrader avant ordre: ${beforeTrades.length} positions ouvertes — symbolId=${symbolId} vol=${volume} SL=${signal.tradeSetup.stopLoss.toFixed(5)} TP=${signal.tradeSetup.takeProfit.toFixed(5)}`);
+    // Enregistrer le listener ProtoOAExecutionEvent AVANT l'envoi —
+    // la lib résout sendCommand avec {} immédiatement pour ProtoOANewOrderReq
+    // car il n'y a pas de ProtoOANewOrderRes dans le protocole Spotware.
+    // Le vrai résultat arrive via un push event non corrélé.
+    const executionEventPromise = connection!.on(PT.EXECUTION_EVENT);
 
-    // Test diagnostique : ordre sans SL/TP pour isoler si le rejet vient des niveaux SL/TP
+    console.log(`📋 cTrader envoi ordre: ${ctraderName} symbolId=${symbolId} vol=${volume} SL=${signal.tradeSetup.stopLoss.toFixed(5)} TP=${signal.tradeSetup.takeProfit.toFixed(5)}`);
+
     await connection!.sendCommand(PT.NEW_ORDER_REQ, {
       ctidTraderAccountId: ACCOUNT_ID,
       symbolId,
       orderType: ORDER_TYPE.MARKET,
       tradeSide,
       volume,
+      stopLoss: priceToDouble(signal.tradeSetup.stopLoss),
+      takeProfit: priceToDouble(signal.tradeSetup.takeProfit),
     });
 
-    // Attendre que cTrader traite l'ordre (ProtoOAExecutionEvent asynchrone)
-    await new Promise(r => setTimeout(r, 3000));
+    // Attendre le ProtoOAExecutionEvent avec timeout 5s
+    const executionEvent = await Promise.race([
+      executionEventPromise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timeout 5s: cTrader n'a pas envoyé d'ExecutionEvent pour ${ctraderName}`)), 5000)),
+    ]);
 
-    const afterTrades = await getOpenTrades();
-    console.log(`📋 cTrader après ordre: ${afterTrades.length} positions ouvertes`);
-    const newTrade = afterTrades.find(t => !beforeIds.has(t.tradeId));
+    const payload = executionEvent.descriptor;
+    const positionId = payload.position?.positionId ?? payload.order?.orderId;
 
-    if (!newTrade) {
-      console.error(`❌ cTrader: aucune nouvelle position trouvée pour ${ctraderName} après 3s. Volume tenté: ${volume}`);
+    console.log(`📋 cTrader ExecutionEvent: executionType=${payload.executionType} positionId=${positionId} errorCode=${payload.errorCode ?? 'none'}`);
+
+    if (!positionId) {
+      console.error(`❌ cTrader ExecutionEvent sans positionId:`, JSON.stringify(payload));
       return {
         success: false,
-        error: `cTrader n'a pas ouvert de position pour ${ctraderName}. L'ordre a peut-être été rejeté (marge insuffisante, marché fermé, limite de positions). Volume tenté: ${volume}.`,
+        error: `cTrader a rejeté l'ordre pour ${ctraderName} (executionType: ${payload.executionType}). Volume: ${volume}.`,
         instrument: ctraderName,
         units: volume,
       };
     }
 
-    console.log(`✅ cTrader Order placed: ${ctraderName} ${tradeSide === TRADE_SIDE.BUY ? 'BUY' : 'SELL'} vol=${volume} — positionId: ${newTrade.tradeId}`);
+    console.log(`✅ cTrader Order placed: ${ctraderName} ${tradeSide === TRADE_SIDE.BUY ? 'BUY' : 'SELL'} vol=${volume} — positionId: ${positionId}`);
 
     return {
       success: true,
-      tradeId: newTrade.tradeId,
-      instrument: newTrade.instrument,
-      units: newTrade.units,
+      tradeId: positionId.toString(),
+      instrument: ctraderName,
+      units: volume,
     };
   } catch (err: any) {
     return { success: false, error: err.message };
