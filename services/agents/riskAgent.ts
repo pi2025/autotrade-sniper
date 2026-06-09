@@ -29,7 +29,7 @@ interface RiskConfig {
 
 const DEFAULT_CONFIG: RiskConfig = {
   maxOpenPositions: 5,
-  maxRiskPerTrade: 1.0,
+  maxRiskPerTrade: 0.25,
   maxCorrelatedPositions: 2,
   maxDailyLosses: 3,
 };
