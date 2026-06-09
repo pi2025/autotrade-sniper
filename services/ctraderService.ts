@@ -467,6 +467,7 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
     // On confirme l'exécution en comparant les positions avant/après.
     const beforeTrades = await getOpenTrades();
     const beforeIds = new Set(beforeTrades.map(t => t.tradeId));
+    console.log(`📋 cTrader avant ordre: ${beforeTrades.length} positions ouvertes — symbolId=${symbolId} vol=${volume} SL=${signal.tradeSetup.stopLoss.toFixed(5)} TP=${signal.tradeSetup.takeProfit.toFixed(5)}`);
 
     await connection!.sendCommand(PT.NEW_ORDER_REQ, {
       ctidTraderAccountId: ACCOUNT_ID,
@@ -479,13 +480,14 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
     });
 
     // Attendre que cTrader traite l'ordre (ProtoOAExecutionEvent asynchrone)
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 3000));
 
     const afterTrades = await getOpenTrades();
+    console.log(`📋 cTrader après ordre: ${afterTrades.length} positions ouvertes`);
     const newTrade = afterTrades.find(t => !beforeIds.has(t.tradeId));
 
     if (!newTrade) {
-      console.error(`❌ cTrader: aucune nouvelle position trouvée pour ${ctraderName} après 1s. Volume tenté: ${volume}`);
+      console.error(`❌ cTrader: aucune nouvelle position trouvée pour ${ctraderName} après 3s. Volume tenté: ${volume}`);
       return {
         success: false,
         error: `cTrader n'a pas ouvert de position pour ${ctraderName}. L'ordre a peut-être été rejeté (marge insuffisante, marché fermé, limite de positions). Volume tenté: ${volume}.`,
