@@ -3,7 +3,7 @@ services:
     name: autotrade-sniper-api
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install --include=dev
     startCommand: NODE_ENV=production npx tsx server.ts
     envVars:
       - key: NODE_ENV
@@ -29,7 +29,7 @@ services:
       - key: CTRADER_LIVE
         value: "false"
       - key: CTRADER_RISK_PERCENT
-        value: "1"
+        value: "0.25"
       - key: VITE_APP_PASSWORD
         sync: false
       - key: GROQ_API_KEY
