@@ -529,6 +529,15 @@ async function runBackgroundMonitor() {
           continue;
         }
 
+        // Filtre économique — avant les agents Groq (coût $0, données réelles)
+        const ecoCheck = await isHighImpactEventSoon(candidate.asset.symbol, 60);
+        if (ecoCheck.isSoon) {
+          const labels = ecoCheck.events.map(e => `${e.currency} ${e.title} (${e.minutesUntil >= 0 ? `dans ${e.minutesUntil}min` : `il y a ${Math.abs(e.minutesUntil)}min`})`).join(' | ');
+          console.log(`📅 Rejet économique ${candidate.asset.symbol}: ${labels}`);
+          scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: candidate.asset.symbol, status: 'REJECTED', reason: `Annonce imminente: ${labels}` }, ...scanLogs].slice(0, MAX_LOGS);
+          continue;
+        }
+
         try {
           // Agent 2 — Analyste Technique IA
           const technical = await runTechnicalAnalysis(candidate);
