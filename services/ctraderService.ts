@@ -430,6 +430,9 @@ export async function getAccountBalance(): Promise<{ balance: number; currency: 
  * Calcule automatiquement le volume (position sizing basé sur le risque).
  */
 export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
+  // Force reconnect — #onClose de la lib est vide, isAuthenticated peut rester true
+  // sur une socket morte. On garantit une connexion fraîche avant chaque ordre.
+  disconnect();
   try {
     await ensureConnection();
   } catch (err: any) {
