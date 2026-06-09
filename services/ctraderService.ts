@@ -462,7 +462,13 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
   const ctraderName = SYMBOL_MAP[signal.asset] ?? signal.asset;
 
   try {
-    const res: any = await connection!.sendCommand(PT.NEW_ORDER_REQ, {
+    // Snapshot des positions AVANT l'ordre — la lib retourne {} pour ProtoOANewOrderReq
+    // car ProtoOAExecutionEvent est un événement non corrélé (pas de clientMsgId matchant).
+    // On confirme l'exécution en comparant les positions avant/après.
+    const beforeTrades = await getOpenTrades();
+    const beforeIds = new Set(beforeTrades.map(t => t.tradeId));
+
+    await connection!.sendCommand(PT.NEW_ORDER_REQ, {
       ctidTraderAccountId: ACCOUNT_ID,
       symbolId,
       orderType: ORDER_TYPE.MARKET,
@@ -472,28 +478,29 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
       takeProfit: priceToDouble(signal.tradeSetup.takeProfit),
     });
 
-    // L'API retourne un ProtoOAExecutionEvent avec la position ouverte.
-    // Si aucune position/order ID n'est présent, on ne marque surtout pas l'ordre comme exécuté.
-    const positionId = res.position?.positionId
-      ?? res.order?.orderId;
+    // Attendre que cTrader traite l'ordre (ProtoOAExecutionEvent asynchrone)
+    await new Promise(r => setTimeout(r, 1000));
 
-    if (!positionId) {
-      console.error('❌ cTrader order response without positionId/orderId:', JSON.stringify(res));
+    const afterTrades = await getOpenTrades();
+    const newTrade = afterTrades.find(t => !beforeIds.has(t.tradeId));
+
+    if (!newTrade) {
+      console.error(`❌ cTrader: aucune nouvelle position trouvée pour ${ctraderName} après 1s. Volume tenté: ${volume}`);
       return {
         success: false,
-        error: `cTrader n'a pas confirmé de position pour ${ctraderName}. Ordre non marqué comme exécuté. Volume tenté: ${volume}.`,
+        error: `cTrader n'a pas ouvert de position pour ${ctraderName}. L'ordre a peut-être été rejeté (marge insuffisante, marché fermé, limite de positions). Volume tenté: ${volume}.`,
         instrument: ctraderName,
         units: volume,
       };
     }
 
-    console.log(`✅ cTrader Order placed: ${ctraderName} ${tradeSide === TRADE_SIDE.BUY ? 'BUY' : 'SELL'} vol=${volume} — positionId: ${positionId}`);
+    console.log(`✅ cTrader Order placed: ${ctraderName} ${tradeSide === TRADE_SIDE.BUY ? 'BUY' : 'SELL'} vol=${volume} — positionId: ${newTrade.tradeId}`);
 
     return {
       success: true,
-      tradeId: positionId.toString(),
-      instrument: ctraderName,
-      units: volume,
+      tradeId: newTrade.tradeId,
+      instrument: newTrade.instrument,
+      units: newTrade.units,
     };
   } catch (err: any) {
     return { success: false, error: err.message };
