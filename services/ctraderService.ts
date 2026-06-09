@@ -469,14 +469,13 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
     const beforeIds = new Set(beforeTrades.map(t => t.tradeId));
     console.log(`📋 cTrader avant ordre: ${beforeTrades.length} positions ouvertes — symbolId=${symbolId} vol=${volume} SL=${signal.tradeSetup.stopLoss.toFixed(5)} TP=${signal.tradeSetup.takeProfit.toFixed(5)}`);
 
+    // Test diagnostique : ordre sans SL/TP pour isoler si le rejet vient des niveaux SL/TP
     await connection!.sendCommand(PT.NEW_ORDER_REQ, {
       ctidTraderAccountId: ACCOUNT_ID,
       symbolId,
       orderType: ORDER_TYPE.MARKET,
       tradeSide,
       volume,
-      stopLoss: priceToDouble(signal.tradeSetup.stopLoss),
-      takeProfit: priceToDouble(signal.tradeSetup.takeProfit),
     });
 
     // Attendre que cTrader traite l'ordre (ProtoOAExecutionEvent asynchrone)
