@@ -183,6 +183,7 @@ export interface OandaOpenTrade {
 let connection: CTraderConnection | null = null;
 let symbolIdMap = new Map<string, number>(); // symbolName → symbolId
 let symbolNameMap = new Map<number, string>(); // symbolId → symbolName
+let symbolDigitsMap = new Map<string, number>(); // symbolName → digits
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let isAuthenticated = false;
 
@@ -236,10 +237,12 @@ async function ensureConnection(): Promise<void> {
 
   symbolIdMap.clear();
   symbolNameMap.clear();
+  symbolDigitsMap.clear();
   for (const sym of (symbolsRes.symbol ?? [])) {
     if (sym.symbolName && sym.symbolId) {
       symbolIdMap.set(sym.symbolName, sym.symbolId);
       symbolNameMap.set(sym.symbolId, sym.symbolName);
+      if (sym.digits != null) symbolDigitsMap.set(sym.symbolName, sym.digits);
     }
   }
 
@@ -476,14 +479,17 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
 
     console.log(`📋 cTrader envoi ordre: ${ctraderName} symbolId=${symbolId} vol=${volume} SL=${signal.tradeSetup.stopLoss.toFixed(5)} TP=${signal.tradeSetup.takeProfit.toFixed(5)}`);
 
+    const digits = symbolDigitsMap.get(ctraderName) ?? 5;
+    const round = (p: number) => parseFloat(p.toFixed(digits));
+
     await connection!.sendCommand(PT.NEW_ORDER_REQ, {
       ctidTraderAccountId: ACCOUNT_ID,
       symbolId,
       orderType: ORDER_TYPE.MARKET,
       tradeSide,
       volume,
-      stopLoss: priceToDouble(signal.tradeSetup.stopLoss),
-      takeProfit: priceToDouble(signal.tradeSetup.takeProfit),
+      stopLoss: round(signal.tradeSetup.stopLoss),
+      takeProfit: round(signal.tradeSetup.takeProfit),
     });
 
     // Attendre ExecutionEvent, OrderErrorEvent ou timeout 10s
