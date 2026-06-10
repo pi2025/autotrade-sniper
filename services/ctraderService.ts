@@ -356,10 +356,13 @@ function calculateVolume(signal: Signal, balance: number): number {
   return Math.min(volume, maxVolume);
 }
 
-/**
- * Convertit un prix en nombre entier × 10^digits pour les champs SL/TP cTrader.
- * cTrader accepte aussi les prix en double — on garde le double pour la simplicité.
- */
+function getSymbolDigits(symbolName: string): number {
+  if (symbolName.endsWith('JPY')) return 3;
+  if (['XAUUSD', 'XAGUSD'].includes(symbolName)) return 2;
+  if (['US500', 'USTEC', 'FRA40', 'UK100', 'GER40'].includes(symbolName)) return 1;
+  return 5;
+}
+
 function priceToDouble(price: number): number {
   return price;
 }
@@ -479,7 +482,7 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
 
     console.log(`📋 cTrader envoi ordre: ${ctraderName} symbolId=${symbolId} vol=${volume} SL=${signal.tradeSetup.stopLoss.toFixed(5)} TP=${signal.tradeSetup.takeProfit.toFixed(5)}`);
 
-    const digits = symbolDigitsMap.get(ctraderName) ?? 5;
+    const digits = symbolDigitsMap.get(ctraderName) ?? getSymbolDigits(ctraderName);
     const round = (p: number) => parseFloat(p.toFixed(digits));
 
     await connection!.sendCommand(PT.NEW_ORDER_REQ, {
