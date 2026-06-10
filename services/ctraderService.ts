@@ -465,10 +465,12 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
   const ctraderName = SYMBOL_MAP[signal.asset] ?? signal.asset;
 
   try {
-    // Enregistrer le listener ProtoOAExecutionEvent AVANT l'envoi —
-    // la lib résout sendCommand avec {} immédiatement pour ProtoOANewOrderReq
-    // car il n'y a pas de ProtoOANewOrderRes dans le protocole Spotware.
-    // Le vrai résultat arrive via un push event non corrélé.
+    // Listener persistant pour logguer TOUT ce que cTrader renvoie (debug)
+    const debugListenerId = connection!.on(PT.EXECUTION_EVENT, (event: any) => {
+      console.log(`🔍 cTrader ExecutionEvent reçu: ${JSON.stringify(event.descriptor)}`);
+    });
+
+    // One-shot promise pour await le prochain ExecutionEvent
     const executionEventPromise = connection!.on(PT.EXECUTION_EVENT);
 
     console.log(`📋 cTrader envoi ordre: ${ctraderName} symbolId=${symbolId} vol=${volume} SL=${signal.tradeSetup.stopLoss.toFixed(5)} TP=${signal.tradeSetup.takeProfit.toFixed(5)}`);
@@ -483,12 +485,28 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
       takeProfit: priceToDouble(signal.tradeSetup.takeProfit),
     });
 
-    // Attendre le ProtoOAExecutionEvent avec timeout 5s
-    const executionEvent = await Promise.race([
-      executionEventPromise,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timeout 5s: cTrader n'a pas envoyé d'ExecutionEvent pour ${ctraderName}`)), 5000)),
-    ]);
+    // Attendre le ProtoOAExecutionEvent avec timeout 10s
+    let executionEvent: any;
+    try {
+      executionEvent = await Promise.race([
+        executionEventPromise,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000)),
+      ]);
+    } catch {
+      // Timeout — fallback : vérifier via reconcile si une position a quand même été ouverte
+      connection!.removeEventListener(debugListenerId);
+      console.error(`❌ cTrader: timeout 10s pour ${ctraderName}. Vérification reconcile...`);
+      const trades = await getOpenTrades();
+      console.log(`📋 Reconcile après timeout: ${trades.length} positions — ${JSON.stringify(trades.map(t => t.instrument))}`);
+      return {
+        success: false,
+        error: `cTrader n'a pas répondu en 10s pour ${ctraderName}. Vérifiez les logs pour "Unknown payload type" (ProtoOAErrorRes).`,
+        instrument: ctraderName,
+        units: volume,
+      };
+    }
 
+    connection!.removeEventListener(debugListenerId);
     const payload = executionEvent.descriptor;
     const positionId = payload.position?.positionId ?? payload.order?.orderId;
 
