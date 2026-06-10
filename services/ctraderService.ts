@@ -482,13 +482,17 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
 
     console.log(`📋 cTrader envoi ordre: ${ctraderName} symbolId=${symbolId} vol=${volume} SL=${signal.tradeSetup.stopLoss.toFixed(5)} TP=${signal.tradeSetup.takeProfit.toFixed(5)}`);
 
-    // MARKET orders n'acceptent pas les SL/TP absolus → utiliser les valeurs relatives
-    // relativeStopLoss/relativeTakeProfit = distance en 1/100000 d'unité de prix (entier)
-    const isBuy = tradeSide === TRADE_SIDE.BUY;
+    // MARKET orders n'acceptent pas les SL/TP absolus → valeurs relatives en 1/100000 de prix
+    // Le step relatif doit respecter la précision du symbole : JPY (3 digits) → step 100
+    const symDigits = getSymbolDigits(ctraderName);
+    const relativeStep = Math.pow(10, 5 - symDigits); // 5 digits→1, 3 digits→100
+    const toRelative = (dist: number) =>
+      Math.round(Math.round(dist * 100000) / relativeStep) * relativeStep;
+
     const slDistance = Math.abs(signal.priceAtSignal - signal.tradeSetup.stopLoss);
     const tpDistance = Math.abs(signal.tradeSetup.takeProfit - signal.priceAtSignal);
-    const relativeStopLoss  = Math.round(slDistance * 100000);
-    const relativeTakeProfit = Math.round(tpDistance * 100000);
+    const relativeStopLoss  = toRelative(slDistance);
+    const relativeTakeProfit = toRelative(tpDistance);
 
     await connection!.sendCommand(PT.NEW_ORDER_REQ, {
       ctidTraderAccountId: ACCOUNT_ID,
