@@ -431,11 +431,27 @@ export async function getAccountBalance(): Promise<{ balance: number; currency: 
   }
 }
 
+// Mutex : un seul placeOrder à la fois pour éviter les race conditions sur la connexion
+let placeOrderLock: Promise<void> = Promise.resolve();
+
 /**
  * Place un Market Order sur cTrader à partir d'un Signal V15.
  * Calcule automatiquement le volume (position sizing basé sur le risque).
  */
 export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
+  const prevLock = placeOrderLock;
+  let releaseLock!: () => void;
+  placeOrderLock = new Promise<void>(resolve => { releaseLock = resolve; });
+  await prevLock;
+
+  try {
+    return await _placeOrderImpl(signal);
+  } finally {
+    releaseLock();
+  }
+}
+
+async function _placeOrderImpl(signal: Signal): Promise<OandaOrderResult> {
   // Force reconnect — #onClose de la lib est vide, isAuthenticated peut rester true
   // sur une socket morte. On garantit une connexion fraîche avant chaque ordre.
   disconnect();
