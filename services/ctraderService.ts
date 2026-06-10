@@ -338,9 +338,9 @@ function calculateVolume(signal: Signal, balance: number): number {
     minVolume = 1000000;      // 0.01 unité minimum
     maxVolume = 100000000000; // 1000 unités max
   } else {
-    step = 1000;       // 0.01 lot forex
-    minVolume = 1000;  // 0.01 lot minimum
-    maxVolume = 100000; // 1 lot standard max
+    step = 100000;      // 1 lot forex (minimum ICMarkets EU)
+    minVolume = 100000; // 1 lot minimum
+    maxVolume = 1000000; // 10 lots max
   }
 
   let volume = Math.floor(rawVolume / step) * step;
@@ -470,8 +470,9 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
       console.log(`🔍 cTrader ExecutionEvent reçu: ${JSON.stringify(event.descriptor)}`);
     });
 
-    // One-shot promise pour await le prochain ExecutionEvent
+    // One-shot promises : succès ou rejet cTrader
     const executionEventPromise = connection!.on(PT.EXECUTION_EVENT);
+    const orderErrorPromise: Promise<any> = connection!.on('ProtoOAOrderErrorEvent');
 
     console.log(`📋 cTrader envoi ordre: ${ctraderName} symbolId=${symbolId} vol=${volume} SL=${signal.tradeSetup.stopLoss.toFixed(5)} TP=${signal.tradeSetup.takeProfit.toFixed(5)}`);
 
@@ -485,22 +486,38 @@ export async function placeOrder(signal: Signal): Promise<OandaOrderResult> {
       takeProfit: priceToDouble(signal.tradeSetup.takeProfit),
     });
 
-    // Attendre le ProtoOAExecutionEvent avec timeout 10s
+    // Attendre ExecutionEvent, OrderErrorEvent ou timeout 10s
     let executionEvent: any;
     try {
       executionEvent = await Promise.race([
         executionEventPromise,
+        orderErrorPromise.then((errEvent: any) => {
+          const d = errEvent.descriptor;
+          throw new Error(`CTRADER_ERROR:${d.errorCode}:${d.description ?? ''}`);
+        }),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000)),
       ]);
-    } catch {
-      // Timeout — fallback : vérifier via reconcile si une position a quand même été ouverte
+    } catch (err: any) {
       connection!.removeEventListener(debugListenerId);
+      const msg = err?.message ?? '';
+      if (msg.startsWith('CTRADER_ERROR:')) {
+        const [, errorCode, ...descParts] = msg.split(':');
+        const description = descParts.join(':');
+        console.error(`❌ cTrader ordre rejeté pour ${ctraderName}: ${errorCode} — ${description}`);
+        return {
+          success: false,
+          error: `cTrader a rejeté l'ordre: ${errorCode}${description ? ` — ${description}` : ''}`,
+          instrument: ctraderName,
+          units: volume,
+        };
+      }
+      // Timeout — fallback reconcile
       console.error(`❌ cTrader: timeout 10s pour ${ctraderName}. Vérification reconcile...`);
       const trades = await getOpenTrades();
       console.log(`📋 Reconcile après timeout: ${trades.length} positions — ${JSON.stringify(trades.map(t => t.instrument))}`);
       return {
         success: false,
-        error: `cTrader n'a pas répondu en 10s pour ${ctraderName}. Vérifiez les logs pour "Unknown payload type" (ProtoOAErrorRes).`,
+        error: `cTrader n'a pas répondu en 10s pour ${ctraderName}.`,
         instrument: ctraderName,
         units: volume,
       };
