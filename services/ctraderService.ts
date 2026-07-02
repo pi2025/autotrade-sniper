@@ -597,13 +597,36 @@ export async function closeOrder(tradeId: string): Promise<{ success: boolean; e
   }
 
   try {
+    // BUG FIX: volume 0 n'est PAS accepté par cTrader (la requête est ignorée silencieusement).
+    // Il faut envoyer le volume réel de la position — récupéré via reconcile.
+    const before: any = await connection!.sendCommand(PT.RECONCILE_REQ, {
+      ctidTraderAccountId: ACCOUNT_ID,
+    });
+    const position = (before.position ?? []).find((p: any) => (p.positionId ?? 0).toString() === tradeId);
+    if (!position) {
+      return { success: false, error: `Position ${tradeId} introuvable sur le compte (déjà fermée ?)` };
+    }
+    const volume = position.tradeData?.volume;
+    if (!volume) {
+      return { success: false, error: `Volume illisible pour la position ${tradeId}` };
+    }
+
     await connection!.sendCommand(PT.CLOSE_POSITION_REQ, {
       ctidTraderAccountId: ACCOUNT_ID,
       positionId: parseInt(tradeId, 10),
-      volume: 0, // 0 = fermer la totalité de la position
+      volume,
     });
 
-    console.log(`🔒 cTrader Position closed: positionId ${tradeId}`);
+    // Vérifier que la position a bien disparu — l'ack de CLOSE_POSITION_REQ ne garantit pas l'exécution
+    const after: any = await connection!.sendCommand(PT.RECONCILE_REQ, {
+      ctidTraderAccountId: ACCOUNT_ID,
+    });
+    const stillOpen = (after.position ?? []).some((p: any) => (p.positionId ?? 0).toString() === tradeId);
+    if (stillOpen) {
+      return { success: false, error: `Position ${tradeId} toujours ouverte après la demande de fermeture` };
+    }
+
+    console.log(`🔒 cTrader Position closed: positionId ${tradeId} (volume ${volume})`);
     return { success: true };
   } catch (err: any) {
     return { success: false, error: err.message };
