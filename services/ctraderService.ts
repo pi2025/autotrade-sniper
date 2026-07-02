@@ -617,7 +617,9 @@ export async function closeOrder(tradeId: string): Promise<{ success: boolean; e
       volume,
     });
 
-    // Vérifier que la position a bien disparu — l'ack de CLOSE_POSITION_REQ ne garantit pas l'exécution
+    // Vérifier que la position a bien disparu — l'ack de CLOSE_POSITION_REQ ne garantit pas l'exécution.
+    // Petit délai : le reconcile cTrader ne reflète pas la clôture instantanément (sinon faux échec).
+    await new Promise(r => setTimeout(r, 2000));
     const after: any = await connection!.sendCommand(PT.RECONCILE_REQ, {
       ctidTraderAccountId: ACCOUNT_ID,
     });
