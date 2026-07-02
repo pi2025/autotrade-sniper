@@ -423,13 +423,13 @@ export const INITIAL_ASSETS: AssetConfig[] = [
   { symbol: 'BNB-USD', type: AssetType.CRYPTO, active: true, name: "Binance Coin" },
   { symbol: 'XRP-USD', type: AssetType.CRYPTO, active: true, name: "Ripple" },
   
-  // Matières Premières
-  { symbol: 'GC=F', type: AssetType.COMMODITY, active: true, name: "Or (XAU/USD)" },
-  { symbol: 'SI=F', type: AssetType.COMMODITY, active: true, name: "Argent (XAG/USD)" },
-  { symbol: 'CL=F', type: AssetType.COMMODITY, active: true, name: "Pétrole (WTI)" },
-  
-  // Indices
-  { symbol: '^GSPC', type: AssetType.INDEX, active: true, name: "S&P 500" },
-  { symbol: '^IXIC', type: AssetType.INDEX, active: true, name: "NASDAQ" },
-  { symbol: '^FCHI', type: AssetType.INDEX, active: true, name: "CAC 40" }
+  // Matières Premières — désactivées (audit 2026-07-02) : jamais validées en walk-forward, -6.72R / PF 0.42 en production
+  { symbol: 'GC=F', type: AssetType.COMMODITY, active: false, name: "Or (XAU/USD)" },
+  { symbol: 'SI=F', type: AssetType.COMMODITY, active: false, name: "Argent (XAG/USD)" },
+  { symbol: 'CL=F', type: AssetType.COMMODITY, active: false, name: "Pétrole (WTI)" },
+
+  // Indices — désactivés (audit 2026-07-02) : jamais validés en walk-forward, -8.56R / PF 0.50 en production (^IXIC : -9R sur 10 trades)
+  { symbol: '^GSPC', type: AssetType.INDEX, active: false, name: "S&P 500" },
+  { symbol: '^IXIC', type: AssetType.INDEX, active: false, name: "NASDAQ" },
+  { symbol: '^FCHI', type: AssetType.INDEX, active: false, name: "CAC 40" }
 ];

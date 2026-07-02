@@ -169,6 +169,8 @@ export interface Signal {
   estimatedDuration: string; 
   isBreakevenSet?: boolean;
   originalStopLoss?: number; // SL initial avant breakeven — utilisé pour calculer le R correct
+  executed?: boolean; // true si l'ordre a réellement été placé sur cTrader (sinon signal resté virtuel/paper)
+  brokerTradeId?: string; // positionId cTrader — permet la réconciliation P&L signal vs broker
 }
 
 export interface AssetConfig {

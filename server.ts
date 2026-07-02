@@ -75,6 +75,9 @@ let dailyTradeCount: Record<string, number> = {};
 let dailyTradeCountDate = new Date().toDateString();
 type AgentMode = 'signals' | 'semi-auto' | 'autonomous';
 let agentMode: AgentMode = 'signals'; // défaut : détection uniquement, pas d'exécution
+// Stratégie de base sélectionnée (non adaptée) — l'agent performance dérive activeStrategy depuis celle-ci
+// à chaque réapprentissage, pour éviter d'empiler les boosts sur une stratégie déjà adaptée.
+let baseStrategy = DEFAULT_STRATEGY;
 let activeStrategy = DEFAULT_STRATEGY;
 let lastScanTime = 0;
 let lastBatchTimeMs = 0;
@@ -85,8 +88,22 @@ let riskLimits = {
   maxDrawdownPercent:  15,  // suspension si drawdown > X% depuis capital initial
   initialCapital:       0,  // chargé depuis le broker au 1er démarrage
 };
-// signalId → brokerTradeId (stockage en mémoire, non persisté)
+// signalId → brokerTradeId — persisté dans app_config pour survivre aux redémarrages Render
 const brokerTradeIds = new Map<string, string>();
+
+function persistBrokerTradeIds() {
+  if (supabase) supabase.from('app_config').upsert({ key: 'brokerTradeIds', value: Object.fromEntries(brokerTradeIds) });
+}
+
+// Marque un signal comme réellement exécuté sur cTrader — le flag suit le signal jusque dans `history`,
+// ce qui permet de distinguer la P&L des trades réels de celle des signaux restés virtuels (paper).
+async function markSignalExecuted(signal: Signal, tradeId: string) {
+  signal.executed = true;
+  signal.brokerTradeId = tradeId;
+  brokerTradeIds.set(signal.id, tradeId);
+  persistBrokerTradeIds();
+  if (supabase) await supabase.from('signals').update({ content: signal }).eq('id', signal.id);
+}
 const MAX_CURRENCY_EXPOSURE = 2;
 const MAX_LOGS = 50;
 const COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4 heures — évite le re-entry rapide après clôture
@@ -266,8 +283,9 @@ async function emergencyStop(triggeredBy: string): Promise<string> {
     result.success ? closed++ : failed++;
   }
 
-  // 3. Vider brokerTradeIds en mémoire
+  // 3. Vider brokerTradeIds (mémoire + persistance)
   brokerTradeIds.clear();
+  persistBrokerTradeIds();
 
   const summary =
     `🚨 *EMERGENCY STOP* — Déclenché par: ${triggeredBy}\n` +
@@ -315,6 +333,26 @@ async function checkRiskLimits(): Promise<{ allowed: boolean; reason: string }> 
   return { allowed: true, reason: '' };
 }
 
+// --- RÉAPPRENTISSAGE CONTINU ---
+// Appelé après chaque clôture de trade : recalcule blocages/multiplicateurs par actif et le régime
+// de stratégie (NORMAL/STRICT/RECOVERY) au fil des trades, pas seulement au démarrage du serveur.
+async function relearnPerformance() {
+  try {
+    const prevMode = performanceAgent.getState().strategyBias.mode;
+    await performanceAgent.learn(tradeHistory);
+    const newState = performanceAgent.getState();
+    activeStrategy = performanceAgent.adaptStrategy(baseStrategy);
+    if (newState.strategyBias.mode !== prevMode) {
+      console.log(`🧠 Régime stratégie: ${prevMode} → ${newState.strategyBias.mode}`);
+      await sendTelegramMessage(
+        `🧠 *Agent performance — changement de régime*\n${prevMode} → *${newState.strategyBias.mode}*\n${newState.strategyBias.reason}`
+      );
+    }
+  } catch (e: any) {
+    console.error('⚠️ Réapprentissage performance échoué:', e?.message ?? e);
+  }
+}
+
 // --- MOTEUR DE TRADING ---
 async function runBackgroundMonitor() {
   console.log("🚀 Moteur Sniper V15 Unifié Démarré (24/7)");
@@ -356,6 +394,15 @@ async function runBackgroundMonitor() {
         }
       }
 
+      // Restaurer le mapping signal → trade cTrader (réconciliation après redémarrage Render)
+      const { data: btCfg } = await supabase.from('app_config').select('value').eq('key', 'brokerTradeIds').single();
+      if (btCfg?.value) {
+        for (const [sid, tid] of Object.entries(btCfg.value as Record<string, string>)) {
+          brokerTradeIds.set(sid, tid);
+        }
+        console.log(`🔗 brokerTradeIds restaurés: ${brokerTradeIds.size} trade(s) exécuté(s) sur cTrader`);
+      }
+
       // Capital initial : récupéré une fois depuis le broker, puis persisté
       if (riskLimits.initialCapital === 0) {
         const acc = await getAccountBalance();
@@ -373,7 +420,7 @@ async function runBackgroundMonitor() {
   }
 
   await performanceAgent.init(supabase, tradeHistory);
-  activeStrategy = performanceAgent.adaptStrategy(activeStrategy);
+  activeStrategy = performanceAgent.adaptStrategy(baseStrategy);
   console.log(`🧠 Agent performance initialisé — régime: ${performanceAgent.getState().strategyBias.mode}`);
 
   while (true) {
@@ -445,6 +492,19 @@ async function runBackgroundMonitor() {
           activeSignals = activeSignals.filter(s => s.id !== existing.id);
           tradeHistory = [closedSignal, ...tradeHistory].slice(0, 200);
 
+          // Fermer la position cTrader miroir si le signal avait été exécuté — le SL/TP broker est figé
+          // à l'entrée, seul le serveur applique breakeven/trailing : sans ça la position réelle survit au signal.
+          const brokerTradeId = brokerTradeIds.get(existing.id);
+          if (brokerTradeId) {
+            const closeResult = await closeOrder(brokerTradeId);
+            if (!closeResult.success) {
+              console.error(`⚠️ Fermeture cTrader échouée pour ${existing.asset} (#${brokerTradeId}): ${closeResult.error}`);
+              await sendTelegramMessage(`⚠️ *Fermeture cTrader échouée* — ${asset.name} (#${brokerTradeId})\nErreur: ${closeResult.error}\nVérifier manuellement la position (elle a peut-être déjà été fermée par son SL/TP broker).`);
+            }
+            brokerTradeIds.delete(existing.id);
+            persistBrokerTradeIds();
+          }
+
           // BUG FIX: activer le cooldown à la clôture TP/SL (pas seulement suppression manuelle)
           // Évite le re-entry immédiat sur le même actif après close → cause de l'overtrading
           mutedAssets[existing.asset] = Date.now() + COOLDOWN_MS;
@@ -453,6 +513,9 @@ async function runBackgroundMonitor() {
             await supabase.from('history').insert({ id: existing.id, asset: existing.asset, pnl: closedSignal.pnl, content: closedSignal });
             supabase.from('app_config').upsert({ key: 'mutedAssets', value: mutedAssets });
           }
+
+          // Réapprentissage continu : blocages d'actifs et régime de stratégie mis à jour à chaque clôture
+          await relearnPerformance();
 
           await sendTelegramMessage(`🏁 *TRADE CLÔTURÉ* 🏁\n*Actif:* ${asset.name}\n*Résultat:* ${status === SignalStatus.WIN ? '✅ GAIN' : '❌ PERTE'}\n*Profit:* ${closedSignal.pnl.toFixed(2)}R\n*Prix de sortie:* ${currentPrice.toFixed(5)}\n🔇 Cooldown 4h activé`);
         }
@@ -710,7 +773,7 @@ async function runBackgroundMonitor() {
                 } else {
                   const orderResult = await placeOrder(newSignal);
                   if (orderResult.success && orderResult.tradeId) {
-                    brokerTradeIds.set(newSignal.id, orderResult.tradeId);
+                    await markSignalExecuted(newSignal, orderResult.tradeId);
                     scanLogs = [{ id: crypto.randomUUID(), timestamp: Date.now(), asset: asset.symbol, status: 'AUTO_EXECUTED', reason: `🤖 Autonome IA — Confiance: ${decision.confidence}% — cTrader #${orderResult.tradeId}` }, ...scanLogs].slice(0, MAX_LOGS);
                     await sendTelegramMessage(`🤖 *EXÉCUTION AUTONOME IA* 🤖\n*Actif:* ${asset.name}\n*Confiance:* ${decision.confidence}% | *cTrader:* \`${orderResult.tradeId}\``);
                   } else {
@@ -933,7 +996,8 @@ async function startServer() {
     const { strategyId } = req.body;
     const strategy = STRATEGIES.find(s => s.id === strategyId);
     if (strategy) {
-      activeStrategy = strategy;
+      baseStrategy = strategy;
+      activeStrategy = performanceAgent.adaptStrategy(baseStrategy);
       res.json({ success: true, strategyId: activeStrategy.id });
     } else {
       res.status(400).json({ error: "Stratégie invalide" });
@@ -960,11 +1024,19 @@ async function startServer() {
     res.json({ success: true, mutedAssets });
   });
   apiRouter.delete("/signals/:id", requireAuth, async (req, res) => {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const signal = activeSignals.find(s => s.id === id);
     if (signal) {
       activeSignals = activeSignals.filter(s => s.id !== id);
       mutedAssets[signal.asset] = Date.now() + COOLDOWN_MS;
+      // Fermer la position cTrader miroir si le signal avait été exécuté
+      const tid = brokerTradeIds.get(id);
+      if (tid) {
+        const closeResult = await closeOrder(tid);
+        if (!closeResult.success) console.error(`⚠️ Fermeture cTrader échouée pour ${signal.asset} (#${tid}): ${closeResult.error}`);
+        brokerTradeIds.delete(id);
+        persistBrokerTradeIds();
+      }
       if (supabase) {
         await supabase.from('signals').delete().eq('id', id);
       }
@@ -1002,7 +1074,7 @@ async function startServer() {
 
     const result = await placeOrder(signal);
     if (result.success && result.tradeId) {
-      brokerTradeIds.set(id, result.tradeId);
+      await markSignalExecuted(signal, result.tradeId);
       console.log(`✅ Signal ${id} exécuté sur cTrader — tradeId: ${result.tradeId}`);
       return res.json({ success: true, tradeId: result.tradeId, units: result.units });
     }
@@ -1052,7 +1124,7 @@ async function startServer() {
       }
       const result = await placeOrder(signal);
       if (result.success && result.tradeId) {
-        brokerTradeIds.set(signalId, result.tradeId);
+        await markSignalExecuted(signal, result.tradeId);
         await sendTelegramMessage(
           `✅ *ORDRE EXÉCUTÉ*\n` +
           `*Actif:* ${signal.asset}\n` +
