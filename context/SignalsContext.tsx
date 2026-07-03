@@ -374,7 +374,10 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const toggleEngine = async () => {
     try {
-      const res = await fetch(apiUrl('/api/engine/toggle'), { method: 'POST' });
+      const res = await fetch(apiUrl('/api/engine/toggle'), {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${process.env.VITE_APP_PASSWORD || ''}` },
+      });
       if (res.ok) {
         const data = await res.json();
         dispatch({ type: 'SET_ENGINE', payload: data.isRunning });
@@ -391,7 +394,10 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
         try {
           const res = await fetch(apiUrl('/api/engine/strategy'), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${process.env.VITE_APP_PASSWORD || ''}`,
+            },
             body: JSON.stringify({ strategyId: id })
           });
           if (res.ok) {
@@ -405,7 +411,10 @@ export const SignalsProvider: React.FC<{ children: React.ReactNode }> = ({ child
       updateEmailConfig: (cfg: EmailConfig) => dispatch({ type: 'UPDATE_EMAIL_CONFIG', payload: cfg }),
       clearMuted: async () => {
         try {
-          const res = await fetch(apiUrl('/api/engine/unmute'), { method: 'POST' });
+          const res = await fetch(apiUrl('/api/engine/unmute'), {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${process.env.VITE_APP_PASSWORD || ''}` },
+          });
           if (res.ok) {
             dispatch({ type: 'CLEAR_MUTED' });
           }

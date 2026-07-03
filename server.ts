@@ -1024,7 +1024,8 @@ async function startServer() {
     res.json({ success: true, mutedAssets });
   });
   apiRouter.post("/engine/unmute", requireAuth, (req, res) => {
-    const { symbol } = req.body;
+    // Express 5 : req.body est undefined sans body JSON — le front appelle sans body pour "tout vider"
+    const { symbol } = req.body ?? {};
     if (symbol) {
       delete mutedAssets[symbol];
     } else {
