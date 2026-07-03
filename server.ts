@@ -510,7 +510,19 @@ async function runBackgroundMonitor() {
           mutedAssets[existing.asset] = Date.now() + COOLDOWN_MS;
           if (supabase) {
             await supabase.from('signals').delete().eq('id', existing.id);
-            await supabase.from('history').insert({ id: existing.id, asset: existing.asset, pnl: closedSignal.pnl, content: closedSignal });
+            // closed_at DOIT être rempli : le boot trie par cette colonne pour restaurer les 100
+            // derniers trades — NULL partout = restauration arbitraire = apprentissage faussé.
+            const { error: histError } = await supabase.from('history').insert({
+              id: existing.id,
+              asset: existing.asset,
+              pnl: closedSignal.pnl,
+              closed_at: new Date(closedSignal.closedAt).toISOString(),
+              content: closedSignal,
+            });
+            if (histError) {
+              console.error(`🚨 Insert history échoué pour ${existing.asset}:`, histError.message);
+              await sendTelegramMessage(`🚨 *Écriture historique échouée* — ${asset.name} (${closedSignal.pnl.toFixed(2)}R)\nErreur: ${histError.message}\nLe trade est en mémoire mais sera perdu au prochain redémarrage.`);
+            }
             supabase.from('app_config').upsert({ key: 'mutedAssets', value: mutedAssets });
           }
 
@@ -1039,6 +1051,7 @@ async function startServer() {
       }
       if (supabase) {
         await supabase.from('signals').delete().eq('id', id);
+        supabase.from('app_config').upsert({ key: 'mutedAssets', value: mutedAssets });
       }
       res.json({ success: true });
     } else {
