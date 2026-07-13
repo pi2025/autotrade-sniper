@@ -224,7 +224,8 @@ async function fetchYahooInternal(symbol: string, interval: string = '15m', rang
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       const response = await fetch(yahooUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' },
+        signal: AbortSignal.timeout(15000), // évite qu'un fetch Yahoo jamais résolu ne fige la boucle de scan (mono-thread)
       });
 
       if (response.status === 429) {
