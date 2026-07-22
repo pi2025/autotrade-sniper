@@ -70,7 +70,11 @@ const PT = {
   SYMBOLS_LIST_REQ:    'ProtoOASymbolsListReq',
   RECONCILE_REQ:       'ProtoOAReconcileReq',         // 2124 (pas 2122)
   TRADER_REQ:          'ProtoOATraderReq',             // 2121 (pas 2149)
+  DEAL_LIST_REQ:       'ProtoOADealListReq',
 } as const;
+
+// Fenêtre max par requête ProtoOADealListReq côté cTrader (1 semaine, en ms)
+const DEAL_LIST_MAX_RANGE_MS = 6 * 24 * 60 * 60 * 1000; // marge de sécurité sous les 7 jours stricts
 
 // Trade side / Order type (cTrader enums)
 const TRADE_SIDE = { BUY: 1, SELL: 2 } as const;
@@ -177,6 +181,21 @@ export interface OandaOpenTrade {
   openPrice: number;
   unrealizedPnl: number;
   openedAt: string;
+}
+
+// Deal de clôture réalisé côté broker — pour réconcilier le P&L simulé (server) vs réel (cTrader)
+export interface ClosedDeal {
+  dealId: string;
+  positionId: string;
+  instrument: string;
+  direction: 'BUY' | 'SELL';
+  volume: number;       // unités (converti depuis les centièmes cTrader)
+  grossProfit: number;  // USD
+  swap: number;          // USD
+  commission: number;    // USD
+  netProfit: number;     // USD — grossProfit + swap + commission
+  balanceAfter: number;  // USD — solde du compte juste après ce deal
+  closedAt: string;      // ISO
 }
 
 // --- ÉTAT DE CONNEXION ---
@@ -662,6 +681,73 @@ export async function getOpenTrades(): Promise<OandaOpenTrade[]> {
       };
     });
   } catch {
+    return [];
+  }
+}
+
+/**
+ * Retourne les deals de clôture réalisés sur le compte cTrader entre deux timestamps,
+ * pour réconcilier le P&L simulé côté serveur avec le P&L réel du broker.
+ *
+ * ProtoOADealListReq est limité à une fenêtre de 7 jours par requête (contrainte cTrader) :
+ * la plage demandée est découpée en tranches de DEAL_LIST_MAX_RANGE_MS et concaténée.
+ * Seuls les deals de clôture (avec closePositionDetail) sont retournés — les deals d'ouverture
+ * n'ont pas de P&L réalisé.
+ */
+export async function getClosedDeals(fromMs: number, toMs: number): Promise<ClosedDeal[]> {
+  try {
+    await ensureConnection();
+  } catch (err: any) {
+    console.error('cTrader getClosedDeals: connexion échouée:', err.message);
+    return [];
+  }
+
+  const deals: ClosedDeal[] = [];
+
+  try {
+    let chunkStart = fromMs;
+    while (chunkStart < toMs) {
+      const chunkEnd = Math.min(chunkStart + DEAL_LIST_MAX_RANGE_MS, toMs);
+
+      const res: any = await connection!.sendCommand(PT.DEAL_LIST_REQ, {
+        ctidTraderAccountId: ACCOUNT_ID,
+        fromTimestamp: chunkStart,
+        toTimestamp: chunkEnd,
+        maxRows: 1000,
+      });
+
+      for (const d of (res.deal ?? [])) {
+        const detail = d.closePositionDetail;
+        if (!detail || d.dealStatus !== 2 /* FILLED */) continue; // ignorer deals d'ouverture / rejetés
+
+        const digits = detail.moneyDigits ?? 2;
+        const divisor = Math.pow(10, digits);
+        const symbolName = symbolNameMap.get(d.symbolId) ?? `ID:${d.symbolId}`;
+        const grossProfit = (detail.grossProfit ?? 0) / divisor;
+        const swap = (detail.swap ?? 0) / divisor;
+        const commission = (detail.commission ?? 0) / divisor;
+
+        deals.push({
+          dealId: (d.dealId ?? 0).toString(),
+          positionId: (d.positionId ?? 0).toString(),
+          instrument: symbolName,
+          direction: d.tradeSide === TRADE_SIDE.BUY ? 'BUY' : 'SELL',
+          volume: (d.filledVolume ?? d.volume ?? 0) / 100,
+          grossProfit,
+          swap,
+          commission,
+          netProfit: grossProfit + swap + commission,
+          balanceAfter: (detail.balance ?? 0) / divisor,
+          closedAt: new Date(Number(d.executionTimestamp ?? 0)).toISOString(),
+        });
+      }
+
+      chunkStart = chunkEnd;
+    }
+
+    return deals.sort((a, b) => Date.parse(a.closedAt) - Date.parse(b.closedAt));
+  } catch (err: any) {
+    console.error('cTrader getClosedDeals a échoué:', err.message);
     return [];
   }
 }

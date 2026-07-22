@@ -8,7 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
 import { isHighImpactEventSoon, getUpcomingHighImpactEvents } from "./services/economicCalendarService.ts";
-import { testConnection, placeOrder, getAccountBalance, closeOrder, getOpenTrades, setTokenRefreshedHandler, setRefreshFailedHandler } from "./services/ctraderService.ts";
+import { testConnection, placeOrder, getAccountBalance, closeOrder, getOpenTrades, getClosedDeals, setTokenRefreshedHandler, setRefreshFailedHandler } from "./services/ctraderService.ts";
 import { performanceAgent } from "./services/performanceAgent.ts";
 import { generateSignalExplanation } from "./services/geminiService.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
@@ -966,6 +966,26 @@ async function startServer() {
         ? ((riskLimits.initialCapital - status.balance) / riskLimits.initialCapital * 100).toFixed(2)
         : null,
     });
+  });
+  // Réconciliation P&L simulé (signaux/history) vs réel (deals cTrader) sur une fenêtre donnée.
+  // ?days=N (défaut 9) — la fenêtre est bornée à 90 jours pour éviter des requêtes trop lourdes.
+  apiRouter.get("/broker/deals", async (req, res) => {
+    const days = Math.min(Math.max(parseInt(req.query.days as string, 10) || 9, 1), 90);
+    const toMs = Date.now();
+    const fromMs = toMs - days * 24 * 60 * 60 * 1000;
+    try {
+      const deals = await getClosedDeals(fromMs, toMs);
+      const netProfit = deals.reduce((s, d) => s + d.netProfit, 0);
+      res.json({
+        from: new Date(fromMs).toISOString(),
+        to: new Date(toMs).toISOString(),
+        count: deals.length,
+        netProfit: Number(netProfit.toFixed(2)),
+        deals,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
   apiRouter.get("/engine/status", (req, res) => {
     console.log("GET /api/engine/status");
