@@ -8,7 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 import crypto from "crypto";
 import { calculateIndicators, analyzeMarket, INITIAL_ASSETS, DEFAULT_STRATEGY, STRATEGIES } from "./services/marketEngine.ts";
 import { isHighImpactEventSoon, getUpcomingHighImpactEvents } from "./services/economicCalendarService.ts";
-import { testConnection, placeOrder, getAccountBalance, closeOrder, getOpenTrades, getClosedDeals, setTokenRefreshedHandler, setRefreshFailedHandler } from "./services/ctraderService.ts";
+import { testConnection, placeOrder, getAccountBalance, closeOrder, getOpenTrades, getClosedDeals, getRawDealsDebug, setTokenRefreshedHandler, setRefreshFailedHandler } from "./services/ctraderService.ts";
 import { performanceAgent } from "./services/performanceAgent.ts";
 import { generateSignalExplanation } from "./services/geminiService.ts";
 import { Signal, SignalStatus, SignalType, AssetType, TimeFrame } from "./types.ts";
@@ -966,6 +966,18 @@ async function startServer() {
         ? ((riskLimits.initialCapital - status.balance) / riskLimits.initialCapital * 100).toFixed(2)
         : null,
     });
+  });
+  // DEBUG TEMPORAIRE — à retirer après diagnostic du format ProtoOADealListRes
+  apiRouter.get("/broker/deals-debug", async (req, res) => {
+    try {
+      const days = Math.min(Math.max(parseInt(req.query.days as string, 10) || 9, 1), 90);
+      const toMs = Date.now();
+      const fromMs = toMs - days * 24 * 60 * 60 * 1000;
+      const raw = await getRawDealsDebug(fromMs, toMs);
+      res.json(raw);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message, stack: err.stack });
+    }
   });
   // Réconciliation P&L simulé (signaux/history) vs réel (deals cTrader) sur une fenêtre donnée.
   // ?days=N (défaut 9) — la fenêtre est bornée à 90 jours pour éviter des requêtes trop lourdes.

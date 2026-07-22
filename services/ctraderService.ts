@@ -751,3 +751,31 @@ export async function getClosedDeals(fromMs: number, toMs: number): Promise<Clos
     return [];
   }
 }
+
+// DEBUG TEMPORAIRE — retourne les deals bruts sans filtrage pour diagnostiquer le format
+// ProtoOADealListRes réel renvoyé par ce compte. À retirer une fois getClosedDeals validé.
+export async function getRawDealsDebug(fromMs: number, toMs: number): Promise<any> {
+  try {
+    await ensureConnection();
+  } catch (err: any) {
+    return { error: `Connexion échouée: ${err.message}` };
+  }
+  try {
+    const chunkEnd = Math.min(fromMs + DEAL_LIST_MAX_RANGE_MS, toMs);
+    const res: any = await connection!.sendCommand(PT.DEAL_LIST_REQ, {
+      ctidTraderAccountId: ACCOUNT_ID,
+      fromTimestamp: fromMs,
+      toTimestamp: chunkEnd,
+      maxRows: 1000,
+    });
+    return {
+      requestedFrom: new Date(fromMs).toISOString(),
+      requestedTo: new Date(chunkEnd).toISOString(),
+      rawDealCount: (res.deal ?? []).length,
+      hasMore: res.hasMore,
+      sampleDeals: (res.deal ?? []).slice(0, 5),
+    };
+  } catch (err: any) {
+    return { error: err.message };
+  }
+}
